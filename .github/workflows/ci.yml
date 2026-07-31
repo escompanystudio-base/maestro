@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python 3.12 verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system and project dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile source files
+        run: >-
+          python -m compileall -q
+          orkestra.py gui.py web_panel.py menu.py runner.py workflow.py
+          constants.py models.py logging_config.py ui_tabs
+
+      - name: Check text encoding
+        run: python tools/check_encoding.py
+
+      - name: Smoke-test imports
+        run: >-
+          python -c
+          "import orkestra, runner, web_panel, constants, models, logging_config"
+
+      - name: Run automated tests
+        run: python -m pytest -q
