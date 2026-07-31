@@ -1,195 +1,174 @@
-# AI Orkestra 🎻
+<p align="center">
+  <strong>MAESTRO</strong><br />
+  <sub>Local-first orchestration for Codex, Gemini and Claude Code</sub>
+</p>
 
-Codex (ChatGPT) + Gemini + Claude Code'u **tek yerden, sırayla** çalıştıran
-basit ve sağlam bir sistem. Üç ajan da aynı proje klasöründeki **dosyalar
-üzerinden paslaşır** — yani biri `plan.md` yazar, öbürü onu okuyup üstüne
-devam eder. Ekran kazıma / robot tıklama YOK, hepsi araçların resmi
-otomatik (headless) komutlarıyla çalışır. Bu yüzden kırılgan değil.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#how-it-works">Architecture</a> ·
+  <a href="#safety-and-recovery">Safety</a> ·
+  <a href="#türkçe-özet">Türkçe</a>
+</p>
 
-## Neden kırılmaz?
-- **Resmi komutlar:** `codex exec`, `agy -p` (Gemini icin Antigravity CLI), `claude -p`. Arayüz değişse
-  bile bu komutlar çalışmaya devam eder.
-- **Dosya üzerinden paslaşma:** ajanlar birbirine değil, ortak klasördeki
-  dosyalara yazar. En sağlam yöntem budur.
-- **Sohbet / handoff alanı:** `project/sohbet.md` ajanların birbirine bıraktığı
-  kısa devir notlarını tutar. GUI içinde ayrı bir alanda canlı görünür.
-- **Checkpoint'ler:** her adımdan sonra durup sana sorabilir. Yani bir adım
-  yanlış giderse zincirleme bozulmaz, sen araya girersin.
-- **Durum kaydı + resume:** bir adım patlarsa kaldığı yerden devam eder,
-  baştan başlamaz. **Toparla** sihirbazı yarım işi 4 yoldan kurtarır
-  (devam / dosyalara göre toparla / adımı tekrarla / fallback ajanla).
-- **Doğrulama:** her adım bitince "üretmesi gereken dosya gerçekten oluştu mu"
-  diye kontrol eder; kodlama adımlarından sonra otomatik sözdizimi smoke'u koşar.
-- **Sağlık kontrolü:** Başlat'a basınca önce araçlar, yazma izni, workflow
-  geçerliliği ve eksik girdiler denetlenir; sorun varsa akış hiç başlamaz.
-- **Hata sınıflandırma:** adım patlarsa hata türü (limit / eksik araç / login /
-  timeout / eksik çıktı / test / path-encoding) ve ne yapman gerektiği söylenir.
-- **Limit algılama + fallback:** Codex/Gemini/Claude kota hatası verirse net
-  uyarı gösterilir; tanımlıysa aynı adım fallback ajana devredilir.
-- **Snapshot + run geçmişi:** her adım öncesi proje anlık görüntüsü alınır
-  (geri dönülebilir); her çalıştırma `runs.jsonl`'a özetlenir. Workflow her
-  değiştiğinde eski sürümü saklanır.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-0F172A?style=flat-square&logo=python&logoColor=22C55E" alt="Python 3.11 or newer" />
+  <img src="https://img.shields.io/badge/tests-100%20passed-0F172A?style=flat-square&logo=pytest&logoColor=22C55E" alt="100 tests passed" />
+  <img src="https://img.shields.io/badge/runtime-local--first-0F172A?style=flat-square&logo=windowsterminal&logoColor=22C55E" alt="Local-first runtime" />
+</p>
 
-## Kurulum (tek seferlik)
-Üç aracın da kurulu ve giriş yapılmış olması lazım:
+Maestro coordinates multiple coding agents through explicit, file-based handoffs. Each stage reads the shared project state, produces named artifacts and passes control to the next agent. Checkpoints, snapshots, validation and recovery are built into the workflow instead of being left to prompt convention.
 
-```bash
-# Claude Code
-npm install -g @anthropic-ai/claude-code   # sonra: claude  (giris yap)
+<p align="center">
+  <img src="assets/maestro-dashboard.png" alt="Maestro web dashboard showing agent stages, file handoffs and workflow controls" width="100%" />
+</p>
 
-# Codex (ChatGPT)
-npm install -g @openai/codex                # sonra: codex   (giris yap)
+## Why Maestro
 
-# Gemini icin Antigravity CLI
-powershell -ExecutionPolicy Bypass -Command "irm https://antigravity.google/cli/install.ps1 | iex"
-# sonra Antigravity hesabina giris yap; Maestro gemini adimlarini agy -p ile calistirir
+| Capability | What it changes |
+|---|---|
+| File-based handoffs | Agents exchange durable artifacts such as `plan.md`, `tasarim.md` and `rapor.md` instead of relying on hidden chat context. |
+| Human checkpoints | A workflow can pause after any stage for continue, retry or stop decisions. |
+| Resume and recovery | Interrupted runs can continue from saved state or be repaired from existing outputs. |
+| Verification gates | Expected files and syntax checks are validated before a stage is accepted. |
+| Fallback routing | Limit, login, timeout and missing-tool failures are classified and can route to a configured fallback agent. |
+| Local audit trail | Events, run summaries, workflow versions and snapshots stay inside the selected project directory. |
+
+## How it works
+
+```mermaid
+flowchart LR
+    Request["User request"] --> UI["Desktop, web or CLI"]
+    UI --> Engine["Orchestration engine"]
+    Engine --> Runner["Agent process runner"]
+    Runner --> Agents["Codex, Gemini or Claude Code"]
+    Agents --> Workspace["Shared project artifacts"]
+    Workspace --> Verify["Output verification"]
+    Verify --> Decision{"Checkpoint"}
+    Decision -->|Continue| Engine
+    Decision -->|Retry| Runner
+    Decision -->|Recover| Snapshot["State and snapshot recovery"]
+    Snapshot --> Engine
 ```
 
-> Önemli: bunlara **kendi aboneliklerinle** (Claude Pro, ChatGPT Pro, Google)
-> giriş yaparsan ekstra API parası çıkmaz, her birinin kendi kullanım limiti
-> harcanır. API anahtarı yerine `login` ile gir.
+The main surfaces share the same engine:
 
-Python tarafı için (3.11+) bağımlılıkları kur:
+- `gui.py` — desktop application;
+- `web_panel.py` — browser dashboard and local HTTP server;
+- `menu.py` — terminal control surface;
+- `orkestra.py` — workflow validation, state, snapshots, recovery and execution;
+- `runner.py` — subprocess execution shared by desktop and web;
+- `workflow.py` — editable stage definitions.
+
+## Quick start
+
+### 1. Install
+
+Python 3.11 or newer is required. Install at least one supported agent CLI and sign in with its official login flow.
 
 ```bash
-pip install -e .            # customtkinter + pydantic (pyproject.toml'dan)
-pip install -e .[dev]       # + pytest (testleri koşacaksan)
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -e .[dev]
 ```
 
-## 🖥️ Masaüstü Uygulama (en kolayı, butonlu pencere)
-
-Çift tıklayıp açabileceğin pencereli uygulama. Adımları görürsün, butonlarla
-çalıştırır, her checkpoint'te **Devam / Tekrarla / Durdur** butonlarıyla
-müdahale edersin, çıktıyı canlı izlersin.
-
-- **Windows:** `uygulama.bat` dosyasına çift tıkla.
-- **Mac/Linux:** `./uygulama.sh` (ya da `python3 gui.py`).
-
-Ana ekran sohbet gibidir: ortada ajanların konuşma/devir kartları akar, alttaki
-mesaj kutusuna isteğini yazıp **Enter** (veya Gönder) ile akışı başlatırsın.
-Üstteki **faz şeridi** nerede olduğunu gösterir:
-`İstek → Sorular → Workflow onayı → Çalıştır → Kontrol → Teslim` — akış bitince
-**Teslim paketi** butonu çıktıları tek zip'e paketler. Solda adım listesi
-(tıklayınca adım detayı), altta **Toparla** (yarım işi kurtarma) dâhil kontrol
-butonları vardır. Teknik log, dosyalar (Plan / Tasarım / Kodlama Raporu /
-Kontrol), önizleme, performans, geçmiş (snapshot + çalıştırma kayıtları) gibi
-gelişmiş paneller ayrı **Araçlar** penceresindedir.
-
-> Not: Masaüstü uygulaması `customtkinter` kullanır (`pip install -e .` kurar).
-> Linux'ta ayrıca `sudo apt install python3-tk` gerekebilir.
-
-Akış başlamadan önce gereken gerçek ajan komutları kontrol edilir. Workflow hangi
-ajanları kullanıyorsa onların komutları (`codex`, `gemini`, `claude`) PATH içinde
-yoksa sistem sahte çalıştırmaya düşmez; hangi komutun eksik olduğunu söyler.
-
-Gemini adimlari varsayilan olarak API key kullanmadan Antigravity CLI uzerinden
-calisir: `agy --dangerously-skip-permissions -p`. Eski Gemini CLI'ye donmek
-gerekirse `MAESTRO_GEMINI_BACKEND=gemini-cli` ortam degiskenini ayarla.
-Antigravity icinde belirli bir modeli zorlamak istersen `MAESTRO_ANTIGRAVITY_MODEL`
-degerini kullanabilirsin. Varsayilan ornek akista Gemini adimlarinin fallback'i
-Claude olarak ayarlidir.
-
-## Web Panel
-
-Tarayicida calisan panel icin:
+### 2. Start a surface
 
 ```bash
+# Browser dashboard — http://127.0.0.1:8765
 python web_panel.py --open
+
+# Desktop app
+python gui.py
+
+# Terminal menu
+python menu.py
 ```
 
-Windows'ta `web_panel.bat` dosyasina cift tiklayabilirsin. Panel varsayilan
-olarak `http://127.0.0.1:8765` adresinde acilir (Python'un standart HTTP
-sunucusu; ek web framework'u yok).
+On Windows, `uygulama.bat` and `web_panel.bat` provide double-click launchers.
 
-> Guvenlik: panel yerel olmayan bir adreste dinletilirse (`--host 0.0.0.0`)
-> erisim token'i zorunludur — `--token` vermezsen otomatik uretilir ve
-> baslangicta URL ile birlikte yazdirilir (`http://.../?token=...`).
+### 3. Customize the workflow
 
-Panelde:
-- `Is Istegi` alanini kaydedip akisi bastan baslatabilir veya secili adimdan devam edebilirsin.
-- `Kaynak` alanina eski proje klasoru veya tek kod dosyasi yolu girip taratabilirsin; panel `kaynak_context.md` uretir ve ajanlar akisa baslarken bunu okur.
-- Codex/Gemini/Claude komut durumlari ustte gorunur.
-- Checkpoint aciksa her adim sonunda `Devam`, `Tekrarla`, `Durdur` karari webden verilir.
-- Canli log, ajan sohbeti, uretilen dosyalar, metrikler ve snapshot ozeti tek ekrandadir.
+Edit `workflow.py` to choose stages, agents, inputs, outputs, time limits, checkpoints and fallback behavior. The default sequence follows a practical delivery loop:
+
+```text
+plan → design → implement → review → repair → deliver
+```
+
+## Supported agent backends
+
+Maestro invokes installed command-line tools directly; it does not scrape or automate vendor web interfaces.
+
+| Agent | Default command path |
+|---|---|
+| Codex | `codex exec` |
+| Gemini | Antigravity CLI via `agy -p` |
+| Claude Code | `claude -p` |
+
+Availability, billing and usage limits remain governed by each provider account. Maestro does not bundle credentials or bypass provider controls.
+
+## Safety and recovery
+
+- Preflight checks verify tools, project access and workflow validity before execution.
+- The web panel binds to `127.0.0.1` by default.
+- A non-local bind requires an access token; one is generated if `--token` is omitted.
+- Snapshots are taken before stages and can be inspected or restored.
+- Child-process shutdown and stuck-stage handling are explicit recovery paths.
+- Runtime logs, prompts, events and snapshots are excluded from the public repository by `.gitignore`.
+
+Do not commit project runtime folders: prompts and generated artifacts may contain private source code or operational data. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+## Verification
+
+The public release was checked on Windows with Python 3.13:
+
+```text
+100 automated tests passed
+python -m compileall completed successfully
+known credential-prefix scan returned zero hits
+```
+
+These checks verify the local engine and test doubles. Real-agent execution still depends on locally installed CLIs, authenticated provider accounts and their current availability.
+
+Run the same checks locally:
+
+```bash
+python -m pytest -q
+python -m compileall -q .
+```
+
+## Repository map
+
+```text
+maestro/
+├─ gui.py                 desktop interface
+├─ web_panel.py           browser panel and local server
+├─ orkestra.py            orchestration and recovery engine
+├─ runner.py              shared agent process runner
+├─ workflow.py            workflow definitions
+├─ ui_tabs/               desktop tool panels
+├─ web/static/            web interface assets
+├─ tests/                 engine, runner, web and security tests
+└─ tools/                 repository validation helpers
+```
+
+## Contributing
+
+Focused bug reports and reproducible improvement proposals are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Security issues should be reported privately as described in [SECURITY.md](SECURITY.md).
+
+## Türkçe özet
+
+Maestro; Codex, Gemini ve Claude Code'u aynı proje klasöründe dosya tabanlı paslaşma ile sırayla çalıştıran yerel bir orkestrasyon aracıdır. Aşamalar arasında kontrol noktaları koyar, yarım kalan çalışmaları sürdürür, beklenen çıktıları doğrular ve hata durumunda toparlama seçenekleri sunar.
+
+En hızlı başlangıç için `pip install -e .[dev]` komutundan sonra `python web_panel.py --open` çalıştırabilirsin.
 
 ---
 
-## Çalıştırma
-
-**En kolay yol — menü:**
-```bash
-./menu.sh        # ya da: python3 menu.py
-```
-Renkli bir kontrol paneli açılır. Oradan akışı çalıştırır, kaldığı yerden
-devam eder, önizleme yapar, logları ve çıktıları görürsün. Her şey tek yerden.
-
-**Menüsüz, doğrudan komutla istersen:**
-
-```bash
-./run.sh                 # akışı baştan başlat (araçları da kontrol eder)
-./run.sh --dry-run       # hiçbir şey çalıştırma, sadece ne yapacağını göster
-./run.sh --yes           # checkpoint'lerde sorma, tam otomatik
-./run.sh --resume        # bir önceki çalışmanın kaldığı yerden devam et
-./run.sh --from 3        # 3. adımdan başlat
-```
-
-İlk kez deniyorsan menüden **5) Önizleme**'yi seç, akışı gör. Sonra
-**1) Akışı çalıştır** ile başlat; her adım sonunda **Enter** ile devam,
-**r** ile o adımı tekrarlat, **q** ile çık.
-
-## Kendi projene uyarlama
-Sadece **`workflow.py`** dosyasını düzenle. Orada:
-- `PROJECT_DIR` → üç ajanın çalışacağı ortak klasör.
-- `STAGES` → adımlar. Her adımda hangi ajan, ne yapacak, hangi dosyayı okuyup
-  hangisini yazacak yazılı. Prompt'ları kendi işine göre değiştir.
-
-Mantık hep aynı: **planla → tasarla → kodla → kontrol et → düzelt.**
-Ajanları sırayla farklı işlere koşarsın, paslaşmayı dosyalar halleder.
-
-## Dosyalar
-- `gui.py` → masaüstü uygulama (sohbet-merkezli ana ekran + Araçlar penceresi)
-- `web_panel.py` → tarayıcı paneli (operasyon dashboard'u)
-- `menu.py` → terminal menüsü (cmd içinde çalışan)
-- `orkestra.py` → motor: doğrulama, durum, snapshot, limit/fallback, sağlık kontrolü
-- `runner.py` → ortak ajan süreç koşucusu (gui + web_panel aynı çekirdeği kullanır)
-- `workflow.py` → iş akışı (senin düzenleyeceğin dosya)
-- `ui_tabs/` → Araçlar penceresi sekme kurucuları
-- `constants.py` / `models.py` / `logging_config.py` → şablonlar, pydantic durum modeli, dosya logu
-- `tests/` + `pytest.ini` → test paketi (sahte ajanlarla uçtan uca)
-- `pyproject.toml` → bağımlılık manifesti (`pip install -e .[dev]`)
-- `uygulama.bat` / `uygulama.sh`, `web_panel.bat`, `menu.sh` / `run.sh` → başlatıcılar
-- `project/` → çıktılar (`logs/`, `sohbet.md`, `.orkestra/` altında snapshot/metrik/run kayıtları)
-- `DEGISIKLIKLER.md` → yapılan tüm iyileştirmelerin kaydı
-
-## Testler
-
-Gerçek ajanlara ihtiyaç duymadan tüm akışı sahte ajanlarla test edebilirsin:
-
-```bash
-python -m pytest -q     # 60+ test: motor, runner, web panel, güvenlik, toparlama
-```
-
-## Önemli not (dürüst olalım)
-Bu sistem token harcar — otomatik çalışan her ajan arka planda çok iş yapar.
-Aboneliklerinle kullanırsan ekstra **para** çıkmaz ama her aracın **limiti**
-harcanır. Limiti az yormak için: prompt'ları net yaz, gereksiz adım koyma,
-küçük işlerde `--dry-run` ile önce gör.
-## Yeni istek akisi
-
-Masaustu uygulamada sag alttaki **Is Istegi** alanina ne yaptirmak istedigini
-yazip **Baslat** dugmesine bas. Bu metin `project/istek.md` dosyasina kaydedilir.
-Codex once 3-5 netlestirme sorusu uretir. Cevaplardan sonra `istek.md`
-yapilandirilmis final brief olur, Codex `workflow_generated.json` dosyasina bu
-projeye ozel adimlari yazar. Uygulama bu workflow'u gosterir; sen onaylarsan
-gercek Codex/Gemini/Claude zinciri baslar.
-
-Yeni dosyalar:
-- `project/brief_questions.json` -> Codex'in sordugu netlestirme sorulari
-- `project/workflow_generated.json` -> onaylanacak otomatik ajan akisi
-- `project/istek.md` -> final brief
-
-Komut satirindan baslatacaksan:
-
-```bash
-python orkestra.py --request "Yapilacak uygulamayi burada tarif et"
-```
+<p align="center">
+  Built by <a href="https://escompanystudio.com">ES Company Studio</a> in Türkiye.
+</p>
