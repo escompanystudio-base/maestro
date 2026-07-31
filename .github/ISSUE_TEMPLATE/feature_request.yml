@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a focused improvement to a real Maestro workflow.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Workflow problem
+      description: What is difficult or impossible today?
+      placeholder: Describe the current workflow and where it breaks down.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should be possible after this improvement?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Share any workaround or alternative you already tried.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private prompts and customer data from this request.
+          required: true

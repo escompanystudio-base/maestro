@@ -11,9 +11,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/escompanystudio-base/maestro/actions/workflows/ci.yml"><img src="https://github.com/escompanystudio-base/maestro/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <img src="https://img.shields.io/badge/Python-3.11%2B-0F172A?style=flat-square&logo=python&logoColor=22C55E" alt="Python 3.11 or newer" />
-  <img src="https://img.shields.io/badge/tests-100%20passed-0F172A?style=flat-square&logo=pytest&logoColor=22C55E" alt="100 tests passed" />
   <img src="https://img.shields.io/badge/runtime-local--first-0F172A?style=flat-square&logo=windowsterminal&logoColor=22C55E" alt="Local-first runtime" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F172A?style=flat-square&logoColor=22C55E" alt="MIT License" /></a>
 </p>
 
 Maestro coordinates multiple coding agents through explicit, file-based handoffs. Each stage reads the shared project state, produces named artifacts and passes control to the next agent. Checkpoints, snapshots, validation and recovery are built into the workflow instead of being left to prompt convention.
@@ -159,7 +160,7 @@ maestro/
 
 ## Contributing
 
-Focused bug reports and reproducible improvement proposals are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Security issues should be reported privately as described in [SECURITY.md](SECURITY.md).
+Focused bug reports and reproducible improvement proposals are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and [SUPPORT.md](SUPPORT.md) before requesting help. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). Security issues should be reported privately as described in [SECURITY.md](SECURITY.md).
 
 ## Türkçe özet
 
