@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maestro</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z"></path>
+            <path d="M8 9.5h8M8 12h5M8 14.5h7"></path>
+          </svg>
+        </div>
+        <div>
+          <p class="eyebrow">AI Orkestra</p>
+          <h1>Maestro</h1>
+        </div>
+      </div>
+      <div class="topbar-center" aria-live="polite">
+        <span id="runState" class="state-pill">Hazir</span>
+        <span id="activeStageText" class="topbar-note">Workspace hazir</span>
+      </div>
+      <div class="topbar-actions">
+        <div id="toolStatus" class="tool-status" aria-live="polite"></div>
+        <button id="packageBtn" class="icon-btn" type="button" title="Teslim Paketi Olustur" aria-label="Teslim Paketi Olustur">
+          <svg viewBox="0 0 24 24" focusable="false"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+        </button>
+        <button id="refreshBtn" class="icon-btn" type="button" title="Yenile" aria-label="Yenile">
+          <svg viewBox="0 0 24 24" focusable="false"><path d="M20 6v5h-5M4 18v-5h5"></path><path d="M18.2 9A7 7 0 0 0 6.8 6.8L4 9.5M5.8 15A7 7 0 0 0 17.2 17.2L20 14.5"></path></svg>
+        </button>
+        <button id="resetBtn" class="icon-btn" type="button" title="Ilerlemeyi sifirla" aria-label="Ilerlemeyi sifirla">
+          <svg viewBox="0 0 24 24" focusable="false"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 4v6h6"></path></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="panel command-panel" aria-labelledby="requestTitle">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Prompt</p>
+            <h2 id="requestTitle">Is Istegi</h2>
+          </div>
+          <span id="saveState" class="state-pill muted">Hazir</span>
+        </div>
+        <textarea id="requestInput" spellcheck="false" placeholder="Ne yaptirmak istedigini buraya yaz. Ornek: Modern admin panel gelistir, kullanici listesi, ayarlar ve rapor ekranlari olsun."></textarea>
+        <div class="source-box" aria-labelledby="sourceTitle">
+          <div class="source-head">
+            <div>
+              <p class="eyebrow">Kaynak</p>
+              <h3 id="sourceTitle">Onceki proje/dosya</h3>
+            </div>
+            <span id="sourceState" class="state-pill muted">Yok</span>
+          </div>
+          <div class="source-input-row">
+            <input id="sourcePathInput" type="text" placeholder="C:\Users\emrea\Desktop\eski-proje veya C:\...\dosya.zip degil, kod dosyasi/klasoru">
+            <button id="scanSourceBtn" class="btn secondary" type="button">Tarat</button>
+          </div>
+          <div class="source-picker-row">
+            <button id="pickSourceFileBtn" class="btn quiet" type="button">Dosya Sec</button>
+            <button id="pickSourceFolderBtn" class="btn quiet" type="button">Klasor Sec</button>
+            <input id="sourceFileInput" class="hidden-file-input" type="file" multiple>
+            <input id="sourceFolderInput" class="hidden-file-input" type="file" webkitdirectory multiple>
+          </div>
+          <div class="source-actions">
+            <button id="clearSourceBtn" class="btn quiet" type="button">Kaynak Temizle</button>
+            <button id="copySourceBtn" class="btn quiet" type="button">Kaynak Kopyala</button>
+            <span id="sourceSummary" class="source-summary">Dosya sec, klasor sec veya yol gir.</span>
+          </div>
+        </div>
+        <div class="primary-actions">
+          <button id="startBtn" class="btn primary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"></path></svg>
+            Bastan Baslat
+          </button>
+          <button id="resumeBtn" class="btn secondary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 1 2.1 5"></path><path d="M5 17v-5h5"></path></svg>
+            Devam Et
+          </button>
+          <button id="smartResumeBtn" class="btn secondary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18 15 12 9 6"></path><path d="M4 18 10 12 4 6"></path></svg>
+            Akilli Devam
+          </button>
+        </div>
+        <div class="secondary-actions">
+          <button id="saveRequestBtn" class="btn quiet" type="button">Istek Kaydet</button>
+          <button id="repairStateBtn" class="btn quiet" type="button">Durumu Toparla</button>
+          <button id="stopBtn" class="btn danger" type="button">Durdur</button>
+        </div>
+        <div class="form-row">
+          <label for="startIndex">Baslangic adimi</label>
+          <select id="startIndex"></select>
+        </div>
+        <label class="switch-row">
+          <input id="checkpointToggle" type="checkbox" checked>
+          <span>Checkpointlerde karar bekle</span>
+        </label>
+        <div class="template-box">
+          <label for="workflowTemplateSelect">Workflow sablonu</label>
+          <div class="template-row">
+            <select id="workflowTemplateSelect" aria-label="Workflow sablonu"></select>
+            <button id="applyTemplateBtn" class="btn quiet" type="button">Uygula</button>
+          </div>
+          <p id="templateHint" class="source-summary">Sablon sec.</p>
+          <div id="rolesContainer" class="roles-container hidden"></div>
+        </div>
+        <div id="checkpointBox" class="checkpoint-box hidden">
+          <strong>Checkpoint karari gerekli</strong>
+          <p>Son adim bitti. Devam et, ayni adimi tekrar calistir veya akisi durdur.</p>
+          <div class="checkpoint-actions">
+            <button data-decision="continue" class="btn primary" type="button">Devam</button>
+            <button data-decision="retry" class="btn secondary" type="button">Tekrarla</button>
+            <button data-decision="stop" class="btn danger" type="button">Durdur</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel overview-panel" aria-labelledby="overviewTitle">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Run</p>
+            <h2 id="overviewTitle">Canli Durum</h2>
+          </div>
+          <span id="statusDetail" class="state-pill wide">Panel hazir</span>
+        </div>
+        <div class="metric-row">
+          <div class="metric">
+            <span>Surec</span>
+            <strong id="progressText">0/0</strong>
+          </div>
+          <div class="metric">
+            <span>Canli sure</span>
+            <strong id="liveElapsedText">0sn</strong>
+          </div>
+          <div class="metric success">
+            <span>Basari</span>
+            <strong id="successText">0</strong>
+          </div>
+          <div class="metric danger">
+            <span>Hata</span>
+            <strong id="failureText">0</strong>
+          </div>
+        </div>
+        <div class="progress-track" aria-label="Akis ilerlemesi">
+          <div id="progressBar" class="progress-fill"></div>
+        </div>
+        <div id="errorBanner" class="error-banner hidden"></div>
+        <div id="issueSummary" class="issue-summary" aria-live="polite"></div>
+        <div class="insight-grid">
+          <div class="insight-box">
+            <span>Siradaki karar</span>
+            <strong id="nextActionText">Istek gir veya akisi baslat</strong>
+          </div>
+          <div class="insight-box output-preview">
+            <span id="lastOutputTitle">Son cikti</span>
+            <pre id="lastOutputPreview">Cikti olusunca burada kisa onizleme gorunur.</pre>
+          </div>
+        </div>
+        <div id="taskMonitorBox" class="task-monitor hidden">
+          <div class="tm-header">
+            <h3>Canli Is Izleyici (Task Monitor)</h3>
+            <span id="tmStatusBadge" class="state-pill">Normal</span>
+          </div>
+          <div class="tm-grid">
+            <div class="tm-item">
+              <span>Aktif Ajan</span>
+              <strong id="tmAgent">-</strong>
+            </div>
+            <div class="tm-item">
+              <span>PID</span>
+              <strong id="tmPid">-</strong>
+            </div>
+            <div class="tm-item">
+              <span>Sure</span>
+              <strong id="tmElapsed">-</strong>
+            </div>
+            <div class="tm-item">
+              <span>Sessizlik</span>
+              <strong id="tmSilent">-</strong>
+            </div>
+            <div class="tm-item">
+              <span>CPU</span>
+              <strong id="tmCpu">-</strong>
+            </div>
+            <div class="tm-item">
+              <span>Bellek</span>
+              <strong id="tmMem">-</strong>
+            </div>
+            <div class="tm-outputs">
+              <h4>Beklenen Ciktilar</h4>
+              <ul id="tmOutputList"></ul>
+            </div>
+            <div class="tm-actions" style="margin-top: 10px; display: flex; gap: 8px;">
+              <button id="tmForceCompleteBtn" class="btn quiet" type="button" title="Islemi tamamlandi sayip siradaki adima gec">Zorla Tamamla</button>
+              <button id="tmForceFallbackBtn" class="btn quiet" type="button" title="Islemi durdur ve siradaki ajanla tekrar dene">Fallback'e Devret</button>
+            </div>
+          </div>
+          <div class="tm-files">
+            <div class="tm-file-group">
+              <span>Eksik Ciktilar:</span>
+              <div id="tmMissingFiles" class="tm-file-list">-</div>
+            </div>
+            <div class="tm-file-group">
+              <span>Olusan Ciktilar:</span>
+              <div id="tmProducedFiles" class="tm-file-list">-</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel flow-panel" aria-labelledby="flowTitle">
+        <div class="section-head flow-head">
+          <div>
+            <p class="eyebrow">Agents</p>
+            <h2 id="flowTitle">Workflow</h2>
+          </div>
+          <div class="flow-tools">
+            <input id="stageSearch" type="search" placeholder="Adim ara">
+            <select id="agentFilter" aria-label="Ajan filtresi">
+              <option value="all">Tum ajanlar</option>
+              <option value="codex">Codex</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+            </select>
+          </div>
+        </div>
+        <div id="workflowList" class="timeline-list"></div>
+      </section>
+
+      <section class="panel workspace-panel" aria-labelledby="workspaceTitle">
+        <div class="workspace-head">
+          <div>
+            <p class="eyebrow">Workspace</p>
+            <h2 id="workspaceTitle">Ciktilar</h2>
+          </div>
+          <div class="tab-list" role="tablist" aria-label="Calisma alani sekmeleri">
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="logs">Log</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="issues">Sorunlar</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="tests">Test</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="source">Kaynak</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="files">Dosyalar</button>
+            <button class="tab active" type="button" role="tab" aria-selected="true" data-tab="chat">Sohbet</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="metrics">Metrik</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="snapshots">Gecmis</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="packages">Paketler</button>
+          </div>
+        </div>
+
+        <section id="tab-logs" class="tab-pane" role="tabpanel">
+          <div class="workspace-toolbar">
+            <input id="logSearch" type="search" placeholder="Log icinde ara">
+            <select id="logLevel" aria-label="Log seviyesi">
+              <option value="all">Tum loglar</option>
+              <option value="command">Komut</option>
+              <option value="checkpoint">Checkpoint</option>
+              <option value="success">Basari</option>
+              <option value="warn">Uyari</option>
+              <option value="error">Hata</option>
+              <option value="tool">Arac logu</option>
+            </select>
+            <button id="clearLogBtn" class="btn quiet" type="button">Temizle</button>
+          </div>
+          <div id="logOutput" class="log-output" role="log" aria-live="polite"></div>
+        </section>
+
+        <section id="tab-issues" class="tab-pane" role="tabpanel">
+          <div id="diagnosticsOutput" class="diagnostics-output"></div>
+        </section>
+
+        <section id="tab-tests" class="tab-pane" role="tabpanel">
+          <div class="workspace-toolbar">
+            <select id="testTarget" aria-label="Test hedefi">
+              <option value="">Tum project</option>
+              <option value="MP3INDIRICI">MP3INDIRICI</option>
+            </select>
+            <button id="runTestsBtn" class="btn secondary" type="button">Test Et</button>
+            <span id="testStatusText" class="toolbar-note">Test bekliyor</span>
+          </div>
+          <div id="testOutput" class="test-output"></div>
+        </section>
+
+        <section id="tab-source" class="tab-pane" role="tabpanel">
+          <div class="workspace-toolbar">
+            <button id="copySourceTabBtn" class="btn secondary" type="button">Kaynak Kopyala</button>
+            <span id="sourceTreeMeta" class="toolbar-note">Kaynak yok</span>
+          </div>
+          <div id="sourceTreeOutput" class="source-tree-output"></div>
+        </section>
+
+        <section id="tab-files" class="tab-pane" role="tabpanel">
+          <div class="workspace-toolbar file-toolbar">
+            <input id="fileSearch" type="search" placeholder="Dosya ara">
+            <select id="fileSelect" aria-label="Dosya sec"></select>
+            <span id="fileCountText" class="toolbar-note">0 dosya</span>
+          </div>
+          <div class="file-layout">
+            <div id="fileList" class="file-list" aria-label="Dosya listesi"></div>
+            <pre id="fileOutput" class="file-output"></pre>
+          </div>
+        </section>
+
+        <section id="tab-chat" class="tab-pane active" role="tabpanel">
+          <pre id="chatOutput" class="chat-output"></pre>
+          <div class="chat-input-row">
+            <input id="chatInput" type="text" placeholder="Ajanlara not ekle">
+            <button id="sendChatBtn" class="btn secondary" type="button">Gonder</button>
+          </div>
+        </section>
+
+        <section id="tab-metrics" class="tab-pane" role="tabpanel">
+          <div id="metricsOutput" class="metrics-output"></div>
+        </section>
+
+        <section id="tab-snapshots" class="tab-pane" role="tabpanel">
+          <div class="snapshot-layout">
+            <div id="snapshotOutput" class="snapshot-output"></div>
+            <div id="snapshotDetailOutput" class="snapshot-detail-output">
+              <div class="empty-state">Snapshot secin</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-packages" class="tab-pane" role="tabpanel">
+          <div class="workspace-toolbar">
+            <button id="createPackageBtn" class="btn primary" type="button">Yeni Teslim Paketi Olustur</button>
+            <span id="packageStatusText" class="toolbar-note">Projeyi paylasima hazirlar.</span>
+          </div>
+          <div id="packageOutput" class="package-output"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

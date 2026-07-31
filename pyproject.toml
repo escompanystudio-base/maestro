@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maestro"
+version = "1.0.0"
+description = "AI Orkestra - Codex, Gemini/Antigravity ve Claude Code ajanlarini dosya tabanli paslasmayla calistiran yerel orkestrasyon araci"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "customtkinter>=5.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+monitor = [
+    "psutil>=5.9",
+]
+
+[tool.setuptools]
+py-modules = ["orkestra", "gui", "menu", "web_panel", "workflow", "runner", "constants", "models", "logging_config"]
+packages = ["ui_tabs"]
+
+[tool.pytest.ini_options]
+# pytest.ini bu dosyaya gore onceliklidir; ayarlar orada tutulur.
