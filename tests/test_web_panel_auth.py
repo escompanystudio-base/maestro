@@ -185,6 +185,79 @@ def test_orchestration_compare_api_with_fake_agents(project_dir, monkeypatch):
         shutdown_server(server)
 
 
+def test_ux_wizard_workflow_creates_brief_and_generated_flow(project_dir):
+    server = create_server("127.0.0.1", 0, project_dir)
+    _serve(server)
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        data = _post_json(
+            f"{base}/api/ux/wizard-workflow",
+            {
+                "request": "Kucuk stok takip paneli yap",
+                "projectType": "Python masaustu",
+                "platform": "Windows",
+                "design": "Sade ve profesyonel",
+                "testExpectation": "Build ve smoke test",
+            },
+        )
+        assert data["ok"] is True
+        assert data["templateId"] == "desktop-python"
+        assert "[Sihirbaz" in data["brief"]
+        assert "Python masaustu" in (project_dir / orkestra.REQUEST_FILE).read_text(encoding="utf-8")
+
+        generated = orkestra.load_generated_workflow(project_dir)
+        assert generated is not None
+        assert generated["project_type"] == "wizard-desktop-python"
+        assert generated["stages"][0]["prompt"].startswith("[Sihirbaz Workflow]")
+        assert data["status"]["resultQuality"]["category"] in {"kontrol-gerekli", "eksik", "hazir"}
+    finally:
+        server.shutdown()
+        shutdown_server(server)
+
+
+def test_result_quality_uses_failed_test_report(project_dir):
+    (project_dir / "test_raporu.json").write_text(
+        json.dumps({"status": "failed", "failed": 1, "checks": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    app = MaestroWebPanel(project_dir)
+    status = app.status_payload()
+    assert status["resultQuality"]["category"] == "test-gecmedi"
+
+
+def test_ux_error_action_prepares_codex_review_without_autostart(project_dir):
+    orkestra.save_user_request(project_dir, "Hata veren uygulamayi kontrol et")
+    server = create_server("127.0.0.1", 0, project_dir)
+    server.app.last_error = "pytest failed"
+    _serve(server)
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        data = _post_json(f"{base}/api/ux/error-action", {"action": "codex_review", "autoStart": False})
+        assert data["ok"] is True
+        assert "Codex kontrol" in data["message"]
+        generated = orkestra.load_generated_workflow(project_dir)
+        assert generated is not None
+        assert generated["project_type"] == "error-codex-review"
+        assert len(generated["stages"]) == 3
+    finally:
+        server.shutdown()
+        shutdown_server(server)
+
+
+def test_ux_error_action_can_run_project_tests(project_dir):
+    server = create_server("127.0.0.1", 0, project_dir)
+    _serve(server)
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        data = _post_json(f"{base}/api/ux/error-action", {"action": "run_tests"})
+        assert data["ok"] is True
+        assert data["result"]["status"] in {"success", "failed"}
+        assert (project_dir / "test_raporu.json").exists()
+    finally:
+        server.shutdown()
+        shutdown_server(server)
+
+
 def test_shutdown_server_before_any_run(project_dir):
     # Hic akis baslatilmadan kapanis AttributeError vermemeli (worker yokken).
     server = create_server("127.0.0.1", 0, project_dir)
