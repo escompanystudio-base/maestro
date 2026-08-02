@@ -37,6 +37,7 @@ from runner import run_agent_stage
 from orkestra import (
     CHAT_FILE,
     GENERATED_WORKFLOW_FILE,
+    CONTEXT_SUMMARY_FILE,
     LOG_DIR,
     REQUEST_FILE,
     STATE_FILE,
@@ -44,12 +45,15 @@ from orkestra import (
     AGENT_ROLES,
     ANTIGRAVITY_OUTPUT_EXIT_GRACE_SECONDS,
     agent_for_role,
+    append_project_memory,
     append_chat_entry,
     append_event,
     append_metric,
+    build_context_summary,
     extract_last_handoff,
     load_decisions,
     load_events,
+    load_project_memory,
     load_run_records,
     produced_files,
     record_stage_decision,
@@ -83,6 +87,7 @@ from orkestra import (
     resolve_command,
     resolve_project_dir,
     restore_snapshot_files,
+    run_agent_comparison,
     save_generated_workflow,
     save_state,
     save_user_request,
@@ -90,6 +95,7 @@ from orkestra import (
     snapshot_diff,
     snapshot_files_dir,
     stage_ref,
+    suggest_agent,
     validate_workflow,
     verify_outputs,
     with_fallback_agent,
@@ -604,6 +610,81 @@ class MaestroWebPanel:
             "includedFiles": meta.get("included_files") or 0,
             "skippedFiles": meta.get("skipped_files") or 0,
             "files": files[:MAX_SOURCE_TREE_FILES],
+        }
+
+    def orchestration_payload(self) -> dict[str, Any]:
+        request_text = read_user_request(self.project_dir)
+        context_path = self.project_dir / CONTEXT_SUMMARY_FILE
+        context_meta: dict[str, Any] = {
+            "exists": context_path.exists(),
+            "name": CONTEXT_SUMMARY_FILE,
+            "size": 0,
+            "modified": "",
+        }
+        if context_path.exists():
+            stat = context_path.stat()
+            context_meta.update(
+                {
+                    "size": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                }
+            )
+        return {
+            "suggestedAgent": suggest_agent(request_text),
+            "memory": load_project_memory(self.project_dir),
+            "contextSummary": context_meta,
+            "decisions": load_decisions(self.project_dir, limit=8),
+        }
+
+    def append_memory_note(self, note: str) -> dict[str, Any]:
+        append_project_memory(self.project_dir, note)
+        append_chat_entry(self.project_dir, "Orkestra", "Proje hafizasina yeni karar/tercih notu eklendi.")
+        return self.orchestration_payload()
+
+    def create_context_summary_payload(self) -> dict[str, Any]:
+        out = build_context_summary(self.project_dir)
+        append_chat_entry(self.project_dir, "Orkestra", f"Context sikistirici calisti: {CONTEXT_SUMMARY_FILE} hazir.")
+        return {
+            "ok": True,
+            "summary": {
+                "name": CONTEXT_SUMMARY_FILE,
+                "size": out.stat().st_size,
+                "modified": datetime.fromtimestamp(out.stat().st_mtime).isoformat(timespec="seconds"),
+            },
+            "orchestration": self.orchestration_payload(),
+        }
+
+    def suggest_agent_payload(self, text: str) -> dict[str, Any]:
+        chosen = suggest_agent(text or read_user_request(self.project_dir))
+        return {"ok": True, "agent": chosen}
+
+    def compare_agents_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.running:
+            raise RuntimeError("Akis calisirken ajan karsilastirma baslatilamaz.")
+        prompt = str(payload.get("prompt") or read_user_request(self.project_dir)).strip()
+        if not prompt:
+            raise ValueError("Karsilastirma icin gorev metni bos olamaz.")
+        raw_agents = payload.get("agents")
+        agents = [str(item) for item in raw_agents] if isinstance(raw_agents, list) else None
+        raw_writes = payload.get("writes")
+        writes = [str(item) for item in raw_writes if str(item).strip()] if isinstance(raw_writes, list) else []
+        timeout = int(payload.get("timeout") or 600)
+        result = run_agent_comparison(
+            self.project_dir,
+            prompt,
+            agents=agents,
+            writes=writes,
+            timeout=timeout,
+            log=self._log,
+        )
+        report = Path(result["report"])
+        return {
+            "ok": True,
+            "comparison": {
+                "results": result["results"],
+                "report": str(report.relative_to(self.project_dir)).replace("\\", "/"),
+            },
+            "status": self.status_payload(),
         }
 
     def copy_source_to_project(self) -> dict[str, Any]:
@@ -1514,6 +1595,7 @@ class MaestroWebPanel:
                 "snapshots": self.snapshot_list(limit=10),
                 "source": self.load_source_meta(),
                 "sourceTree": self.source_tree_payload(),
+                "orchestration": self.orchestration_payload(),
                 "diagnostics": self.diagnostics_payload(),
                 "workflowTemplates": self.workflow_templates_payload(),
             }
@@ -1935,6 +2017,8 @@ class MaestroRequestHandler(BaseHTTPRequestHandler):
             return self._send_json({"ok": True, "decisions": load_decisions(self.app.project_dir)})
         if parsed.path == "/api/events":
             return self._send_json({"ok": True, "events": load_events(self.app.project_dir)})
+        if parsed.path == "/api/orchestration":
+            return self._send_json({"ok": True, "orchestration": self.app.orchestration_payload()})
         if parsed.path == "/api/roles":
             return self._send_json({"ok": True, "roles": AGENT_ROLES})
         if parsed.path == "/api/packages":
@@ -1985,6 +2069,15 @@ class MaestroRequestHandler(BaseHTTPRequestHandler):
                     return self._send_error("Mesaj bos olamaz.", HTTPStatus.BAD_REQUEST)
                 append_chat_entry(self.app.project_dir, "Kullanici", text)
                 return self._send_json({"ok": True})
+            if parsed.path == "/api/orchestration/memory":
+                result = self.app.append_memory_note(str(payload.get("note", "")))
+                return self._send_json({"ok": True, "orchestration": result})
+            if parsed.path == "/api/orchestration/context-summary":
+                return self._send_json(self.app.create_context_summary_payload())
+            if parsed.path == "/api/orchestration/suggest":
+                return self._send_json(self.app.suggest_agent_payload(str(payload.get("text", ""))))
+            if parsed.path == "/api/orchestration/compare":
+                return self._send_json(self.app.compare_agents_payload(payload))
             if parsed.path == "/api/source/scan":
                 source_path = str(payload.get("path", ""))
                 meta = self.app.scan_source_path(source_path)

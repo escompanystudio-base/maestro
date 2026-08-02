@@ -9,7 +9,8 @@ const state = {
   lastPreviewFile: "",
   sourceBusy: false,
   testBusy: false,
-  lastTestResult: null
+  lastTestResult: null,
+  smartBusy: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -44,6 +45,10 @@ function setBusy(running, waitingCheckpoint) {
   $("stopBtn").disabled = !running && !waitingCheckpoint;
   $("applyTemplateBtn").disabled = running;
   $("runTestsBtn").disabled = running || state.testBusy;
+  if ($("suggestAgentBtn")) $("suggestAgentBtn").disabled = state.smartBusy;
+  if ($("buildContextBtn")) $("buildContextBtn").disabled = running || state.smartBusy;
+  if ($("saveMemoryBtn")) $("saveMemoryBtn").disabled = state.smartBusy;
+  if ($("compareAgentsBtn")) $("compareAgentsBtn").disabled = running || state.smartBusy;
   $("checkpointBox").classList.toggle("hidden", !waitingCheckpoint);
   document.body.classList.toggle("is-running", Boolean(running));
   document.body.classList.toggle("is-waiting", Boolean(waitingCheckpoint));
@@ -466,6 +471,7 @@ function renderStatus(data) {
   state.data = data;
   renderTools(data.tools, data);
   renderSource(data.source || {});
+  renderSmartOrchestration(data.orchestration || {});
   renderWorkflow(data);
   renderFiles(data.files);
   renderLog(data);
@@ -523,6 +529,32 @@ function renderSource(source) {
   $("pickSourceFileBtn").disabled = state.sourceBusy;
   $("pickSourceFolderBtn").disabled = state.sourceBusy;
   $("copySourceBtn").disabled = !enabled || Boolean(source.import_path || source.importPath) || state.sourceBusy;
+}
+
+function renderSmartOrchestration(info) {
+  if (!$("smartOutput")) return;
+  const suggested = info.suggestedAgent || "-";
+  $("smartAgentState").textContent = suggested;
+  $("smartAgentState").classList.toggle("muted", suggested === "-");
+  const ctx = info.contextSummary || {};
+  const decisions = Array.isArray(info.decisions) ? info.decisions : [];
+  const lines = [
+    `Onerilen ajan: ${suggested}`,
+    `Context ozeti: ${ctx.exists ? `${ctx.name} (${formatBytes(ctx.size)})` : "yok"}`,
+    "",
+    "Hafiza:",
+    info.memory ? clipText(String(info.memory), 520) : "Henuz proje hafizasi yok.",
+  ];
+  if (decisions.length) {
+    lines.push("", "Son karar kayitlari:");
+    decisions.slice(-4).forEach((item) => {
+      const changed = (item.degistirdi || []).join(", ") || "-";
+      lines.push(`- ${item.agent || "?"} / ${item.stage || "?"}: ${changed}`);
+    });
+  }
+  if ($("smartOutput").dataset.manual !== "1") {
+    $("smartOutput").textContent = lines.join("\n");
+  }
 }
 
 function currentStageText(data) {
@@ -901,6 +933,94 @@ async function sendChat() {
   await refresh();
 }
 
+async function suggestAgentAction() {
+  const text = $("requestInput").value.trim();
+  state.smartBusy = true;
+  $("smartOutput").dataset.manual = "1";
+  try {
+    const data = await api("/api/orchestration/suggest", {
+      method: "POST",
+      body: JSON.stringify({ text })
+    });
+    $("smartAgentState").textContent = data.agent;
+    $("smartAgentState").classList.remove("muted");
+    $("smartOutput").textContent = `Bu is icin onerilen ajan: ${data.agent}`;
+  } finally {
+    state.smartBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function buildContextSummaryAction() {
+  state.smartBusy = true;
+  $("smartOutput").dataset.manual = "1";
+  try {
+    const data = await api("/api/orchestration/context-summary", { method: "POST", body: "{}" });
+    const summary = data.summary || {};
+    $("smartOutput").textContent = `Context ozeti hazir: ${summary.name || "proje_ozeti.md"} (${formatBytes(summary.size)})`;
+    toast("Context ozeti olusturuldu.");
+    await refresh();
+  } finally {
+    state.smartBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function saveMemoryAction() {
+  const note = $("memoryNoteInput").value.trim();
+  if (!note) {
+    toast("Hafiza notu bos.");
+    return;
+  }
+  state.smartBusy = true;
+  $("smartOutput").dataset.manual = "";
+  try {
+    const data = await api("/api/orchestration/memory", {
+      method: "POST",
+      body: JSON.stringify({ note })
+    });
+    $("memoryNoteInput").value = "";
+    renderSmartOrchestration(data.orchestration || {});
+    toast("Hafizaya eklendi.");
+    await refresh();
+  } finally {
+    state.smartBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function compareAgentsAction() {
+  const prompt = $("requestInput").value.trim();
+  if (!prompt) {
+    toast("Karsilastirma icin istek yaz.");
+    return;
+  }
+  if (!confirm("Ayni gorev birden fazla ajana verilecek. Bu islem ajan sayisi kadar limit/token tuketir. Devam edilsin mi?")) {
+    return;
+  }
+  const writes = $("compareWritesInput").value.split(",").map((item) => item.trim()).filter(Boolean);
+  state.smartBusy = true;
+  $("smartOutput").dataset.manual = "1";
+  $("smartOutput").textContent = "Ajan karsilastirma calisiyor...";
+  try {
+    const data = await api("/api/orchestration/compare", {
+      method: "POST",
+      body: JSON.stringify({ prompt, writes })
+    });
+    const comparison = data.comparison || {};
+    const rows = (comparison.results || []).map((item) => {
+      const status = item.ok ? "basarili" : `basarisiz (${item.reason})`;
+      return `- ${item.agent}: ${status}, ${item.elapsed}sn, dosyalar: ${(item.produced || []).join(", ") || "-"}`;
+    });
+    $("smartOutput").textContent = [`Rapor: ${comparison.report || "karsilastirma.md"}`, ...rows].join("\n");
+    toast("Ajan karsilastirma tamamlandi.");
+    await refresh();
+  } finally {
+    state.smartBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
 function activateTab(name) {
   state.activeTab = name;
   document.querySelectorAll(".tab").forEach((button) => {
@@ -967,6 +1087,10 @@ function bindEvents() {
   $("runTestsBtn").addEventListener("click", () => runProjectTests().catch((error) => toast(error.message)));
   $("applyTemplateBtn").addEventListener("click", () => applyWorkflowTemplate().catch((error) => toast(error.message)));
   $("workflowTemplateSelect").addEventListener("change", () => state.data && renderWorkflowTemplates(state.data.workflowTemplates || {}));
+  if ($("suggestAgentBtn")) $("suggestAgentBtn").addEventListener("click", () => suggestAgentAction().catch((error) => toast(error.message)));
+  if ($("buildContextBtn")) $("buildContextBtn").addEventListener("click", () => buildContextSummaryAction().catch((error) => toast(error.message)));
+  if ($("saveMemoryBtn")) $("saveMemoryBtn").addEventListener("click", () => saveMemoryAction().catch((error) => toast(error.message)));
+  if ($("compareAgentsBtn")) $("compareAgentsBtn").addEventListener("click", () => compareAgentsAction().catch((error) => toast(error.message)));
 
   if ($("tmForceCompleteBtn")) {
     $("tmForceCompleteBtn").addEventListener("click", async () => {

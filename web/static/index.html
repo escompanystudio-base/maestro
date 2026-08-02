@@ -74,6 +74,26 @@
             <span id="sourceSummary" class="source-summary">Dosya sec, klasor sec veya yol gir.</span>
           </div>
         </div>
+        <div class="source-box smart-box" aria-labelledby="smartTitle">
+          <div class="source-head">
+            <div>
+              <p class="eyebrow">Akilli Orkestrasyon</p>
+              <h3 id="smartTitle">Ajan zekasi</h3>
+            </div>
+            <span id="smartAgentState" class="state-pill muted">-</span>
+          </div>
+          <div class="source-input-row">
+            <input id="compareWritesInput" type="text" placeholder="Karsilastirma ciktilari: rapor.md, kontrol.md">
+            <button id="suggestAgentBtn" class="btn quiet" type="button">Ajan Oner</button>
+          </div>
+          <textarea id="memoryNoteInput" class="mini-textarea" spellcheck="false" placeholder="Hafizaya eklenecek stack/karar/yasak notu"></textarea>
+          <div class="source-actions">
+            <button id="saveMemoryBtn" class="btn quiet" type="button">Hafizaya Ekle</button>
+            <button id="buildContextBtn" class="btn quiet" type="button">Context Ozeti</button>
+            <button id="compareAgentsBtn" class="btn secondary" type="button">Ajanlari Karsilastir</button>
+          </div>
+          <pre id="smartOutput" class="smart-output">Hafiza, context ozeti ve ajan onerisi burada gorunur.</pre>
+        </div>
         <div class="primary-actions">
           <button id="startBtn" class="btn primary" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"></path></svg>
