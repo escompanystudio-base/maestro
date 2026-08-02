@@ -10,11 +10,30 @@ const state = {
   sourceBusy: false,
   testBusy: false,
   lastTestResult: null,
-  smartBusy: false
+  smartBusy: false,
+  uiMode: loadLocalSetting("maestroUiMode", "expert"),
+  notificationsEnabled: loadLocalSetting("maestroNotifications", "off") === "on",
+  lastNotifyKey: ""
 };
 
 const $ = (id) => document.getElementById(id);
 const OUTPUT_PRIORITY = ["kontrol.md", "rapor.md", "tasarim.md", "plan.md", "kaynak_context.md", "workflow_generated.json", "istek.md"];
+
+function loadLocalSetting(key, fallback) {
+  try {
+    return window.localStorage.getItem(key) || fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function saveLocalSetting(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    // ignore storage failures in private/browser-restricted contexts
+  }
+}
 
 function toast(message) {
   const el = $("toast");
@@ -49,6 +68,10 @@ function setBusy(running, waitingCheckpoint) {
   if ($("buildContextBtn")) $("buildContextBtn").disabled = running || state.smartBusy;
   if ($("saveMemoryBtn")) $("saveMemoryBtn").disabled = state.smartBusy;
   if ($("compareAgentsBtn")) $("compareAgentsBtn").disabled = running || state.smartBusy;
+  if ($("wizardApplyBtn")) $("wizardApplyBtn").disabled = running;
+  document.querySelectorAll("[data-error-action]").forEach((button) => {
+    button.disabled = running || (button.dataset.errorAction === "run_tests" && state.testBusy);
+  });
   $("checkpointBox").classList.toggle("hidden", !waitingCheckpoint);
   document.body.classList.toggle("is-running", Boolean(running));
   document.body.classList.toggle("is-waiting", Boolean(waitingCheckpoint));
@@ -162,6 +185,66 @@ function renderStage(stage, data, completed) {
       </div>
     </article>
   `;
+}
+
+function jobStatus(stage, data, completed) {
+  if (data.status === "failed" && data.currentIndex === stage.index) return "kontrol";
+  if (data.waitingCheckpoint && data.currentIndex === stage.index) return "kontrol";
+  if (stage.status === "running") return "calisiyor";
+  if (completed.has(stage.index) || stage.status === "done") return "tamamlandi";
+  return "bekliyor";
+}
+
+function renderJobBoard(data) {
+  const board = $("jobBoard");
+  if (!board) return;
+  const stages = (data.workflow && data.workflow.stages) || [];
+  const completed = new Set((data.state && data.state.completed) || []);
+  const rows = stages.map((stage) => ({ stage, status: jobStatus(stage, data, completed) }));
+  const columns = [
+    ["bekliyor", "Bekliyor"],
+    ["calisiyor", "Calisiyor"],
+    ["kontrol", "Kontrol gerek"],
+    ["tamamlandi", "Tamamlandi"]
+  ];
+  board.innerHTML = columns.map(([key, title]) => {
+    const items = rows.filter((row) => row.status === key);
+    return `
+      <section class="job-column ${key}" aria-label="${escapeAttr(title)}">
+        <div class="job-column-head">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${items.length}</span>
+        </div>
+        <div class="job-column-body">
+          ${items.length ? items.map(({ stage }) => `
+            <article class="job-card ${escapeAttr(key)}">
+              <div>
+                <strong>${stage.index}. ${escapeHtml(stage.name)}</strong>
+                <span>${escapeHtml(stage.agent || "-")}</span>
+              </div>
+              <small>${escapeHtml(stageStatusLabel(stage, data))}</small>
+            </article>
+          `).join("") : `<div class="job-empty">-</div>`}
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
+function renderResultQuality(quality) {
+  const badge = $("qualityBadge");
+  if (!badge) return;
+  const current = quality || {};
+  const category = current.category || "kontrol-gerekli";
+  badge.className = `quality-pill ${escapeAttr(category)}`;
+  badge.textContent = current.label || "kontrol gerekli";
+}
+
+function renderErrorActions(data) {
+  const box = $("errorActionsBox");
+  if (!box) return;
+  const visible = data.status === "failed" || Boolean(data.lastError);
+  box.classList.toggle("hidden", !visible);
 }
 
 function renderFiles(files) {
@@ -473,6 +556,7 @@ function renderStatus(data) {
   renderSource(data.source || {});
   renderSmartOrchestration(data.orchestration || {});
   renderWorkflow(data);
+  renderJobBoard(data);
   renderFiles(data.files);
   renderLog(data);
   renderDiagnostics(data);
@@ -482,6 +566,8 @@ function renderStatus(data) {
   renderChat(data);
   renderMetrics(data);
   renderSnapshots(data);
+  renderResultQuality(data.resultQuality || {});
+  renderErrorActions(data);
 
   if (!state.requestDirty && document.activeElement !== $("requestInput")) {
     $("requestInput").value = data.request || "";
@@ -504,6 +590,7 @@ function renderStatus(data) {
   $("errorBanner").textContent = hasError ? data.lastError : "";
 
   setBusy(Boolean(data.running), Boolean(data.waitingCheckpoint));
+  maybeNotifyStateChange(data);
   updateLastOutputPreview(data).catch((error) => {
     $("lastOutputPreview").textContent = error.message;
   });
@@ -573,6 +660,103 @@ function nextActionText(data) {
   if (data.status === "complete") return "Ciktilari kontrol et";
   const done = (data.state && data.state.completed || []).length;
   return done > 0 ? "Devam et veya bastan baslat" : "Istek gir ve akisi baslat";
+}
+
+function applyUiMode(mode) {
+  state.uiMode = mode === "simple" ? "simple" : "expert";
+  document.body.classList.toggle("mode-simple", state.uiMode === "simple");
+  document.body.classList.toggle("mode-expert", state.uiMode !== "simple");
+  saveLocalSetting("maestroUiMode", state.uiMode);
+  const button = $("uiModeBtn");
+  if (button) {
+    button.textContent = state.uiMode === "simple" ? "Basit" : "Uzman";
+    button.setAttribute("aria-pressed", state.uiMode === "expert" ? "true" : "false");
+    button.title = state.uiMode === "simple" ? "Uzman moda gec" : "Basit moda gec";
+  }
+}
+
+function toggleUiMode() {
+  applyUiMode(state.uiMode === "simple" ? "expert" : "simple");
+}
+
+function updateNotificationButton() {
+  const button = $("notifyBtn");
+  if (!button) return;
+  button.classList.toggle("active", state.notificationsEnabled);
+  button.title = state.notificationsEnabled ? "Bildirimler acik" : "Bildirimleri ac";
+  button.setAttribute("aria-label", button.title);
+}
+
+function playBeep() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = 720;
+    gain.gain.value = 0.05;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    window.setTimeout(() => {
+      osc.stop();
+      ctx.close();
+    }, 180);
+  } catch (error) {
+    // Ses izni yoksa sessiz gec.
+  }
+}
+
+function notifyUser(title, body) {
+  if (!state.notificationsEnabled) return;
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      new Notification(title, { body });
+    } catch (error) {
+      // Bildirim engellenirse ses fallback'i kalir.
+    }
+  }
+  playBeep();
+}
+
+async function enableNotifications() {
+  if ("Notification" in window && Notification.permission === "default") {
+    const permission = await Notification.requestPermission();
+    state.notificationsEnabled = permission === "granted";
+  } else if ("Notification" in window) {
+    state.notificationsEnabled = Notification.permission === "granted";
+  } else {
+    state.notificationsEnabled = true;
+  }
+  saveLocalSetting("maestroNotifications", state.notificationsEnabled ? "on" : "off");
+  updateNotificationButton();
+  toast(state.notificationsEnabled ? "Bildirimler acildi." : "Bildirim izni verilmedi.");
+  if (state.notificationsEnabled) playBeep();
+}
+
+function maybeNotifyStateChange(data) {
+  let key = "";
+  let title = "";
+  let body = "";
+  if (data.waitingCheckpoint) {
+    key = `${data.runId || "run"}:checkpoint:${data.currentIndex || 0}`;
+    title = "Maestro checkpoint bekliyor";
+    body = data.statusDetail || "Devam karari gerekiyor.";
+  } else if (data.status === "failed") {
+    key = `${data.runId || "run"}:failed:${data.currentIndex || 0}:${data.lastError || ""}`;
+    title = "Maestro hata verdi";
+    body = data.lastError || data.statusDetail || "Akis hata ile durdu.";
+  } else if (data.status === "complete") {
+    key = `${data.runId || "run"}:complete`;
+    title = "Maestro isi bitirdi";
+    body = (data.resultQuality && data.resultQuality.label) || "Ciktilar hazir.";
+  }
+  if (!key) return;
+  if (state.lastNotifyKey === key) return;
+  state.lastNotifyKey = key;
+  notifyUser(title, body);
 }
 
 async function updateLastOutputPreview(data) {
@@ -759,6 +943,35 @@ async function startRun(resetState) {
   await refresh();
 }
 
+function wizardPayload() {
+  return {
+    request: $("requestInput").value,
+    projectType: $("wizardProjectType").value,
+    platform: $("wizardPlatform").value,
+    design: $("wizardDesign").value,
+    testExpectation: $("wizardTestExpectation").value
+  };
+}
+
+async function applyWizardWorkflow() {
+  if (!$("requestInput").value.trim()) {
+    toast("Once ne yapmak istedigini yaz.");
+    $("requestInput").focus();
+    return;
+  }
+  $("wizardState").textContent = "Olusturuluyor";
+  const data = await api("/api/ux/wizard-workflow", {
+    method: "POST",
+    body: JSON.stringify(wizardPayload())
+  });
+  $("requestInput").value = data.brief || $("requestInput").value;
+  state.requestDirty = false;
+  $("saveState").textContent = "Kaydedildi";
+  $("wizardState").textContent = data.templateLabel || "Hazir";
+  toast(`Workflow hazir: ${data.templateLabel || data.templateId || "sihirbaz"}`);
+  renderStatus(data.status || await api("/api/status"));
+}
+
 async function stopRun() {
   await api("/api/run/stop", { method: "POST", body: "{}" });
   toast("Durdurma istegi gonderildi.");
@@ -902,6 +1115,22 @@ async function runProjectTests() {
     $("runTestsBtn").disabled = false;
     await refresh();
   }
+}
+
+async function runErrorAction(action) {
+  if (action === "run_tests") {
+    await runProjectTests();
+    return;
+  }
+  if (action === "restore_last_snapshot" && !confirm("Son snapshot proje dosyalarina geri yuklenecek. Devam edilsin mi?")) {
+    return;
+  }
+  const data = await api("/api/ux/error-action", {
+    method: "POST",
+    body: JSON.stringify({ action })
+  });
+  toast(data.message || "Aksiyon tamamlandi.");
+  renderStatus(data.status || await api("/api/status"));
 }
 
 async function applyWorkflowTemplate() {
@@ -1063,6 +1292,9 @@ function escapeAttr(value) {
 
 function bindEvents() {
   $("refreshBtn").addEventListener("click", refresh);
+  if ($("uiModeBtn")) $("uiModeBtn").addEventListener("click", toggleUiMode);
+  if ($("notifyBtn")) $("notifyBtn").addEventListener("click", () => enableNotifications().catch((error) => toast(error.message)));
+  if ($("wizardApplyBtn")) $("wizardApplyBtn").addEventListener("click", () => applyWizardWorkflow().catch((error) => toast(error.message)));
   if ($("packageBtn")) $("packageBtn").addEventListener("click", () => activateTab("packages"));
   if ($("createPackageBtn")) $("createPackageBtn").addEventListener("click", createPackage);
   $("resetBtn").addEventListener("click", () => resetProgress().catch((error) => toast(error.message)));
@@ -1146,12 +1378,17 @@ function bindEvents() {
   document.querySelectorAll("[data-decision]").forEach((button) => {
     button.addEventListener("click", () => sendDecision(button.dataset.decision).catch((error) => toast(error.message)));
   });
+  document.querySelectorAll("[data-error-action]").forEach((button) => {
+    button.addEventListener("click", () => runErrorAction(button.dataset.errorAction).catch((error) => toast(error.message)));
+  });
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
 }
 
 bindEvents();
+applyUiMode(state.uiMode);
+updateNotificationButton();
 fetchRoles();
 loadPackages();
 refresh();

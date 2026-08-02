@@ -24,10 +24,15 @@
       </div>
       <div class="topbar-center" aria-live="polite">
         <span id="runState" class="state-pill">Hazir</span>
+        <span id="qualityBadge" class="quality-pill muted">Kontrol gerekli</span>
         <span id="activeStageText" class="topbar-note">Workspace hazir</span>
       </div>
       <div class="topbar-actions">
         <div id="toolStatus" class="tool-status" aria-live="polite"></div>
+        <button id="uiModeBtn" class="mode-toggle" type="button" aria-pressed="false">Uzman</button>
+        <button id="notifyBtn" class="icon-btn" type="button" title="Bildirimleri ac" aria-label="Bildirimleri ac">
+          <svg viewBox="0 0 24 24" focusable="false"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>
+        </button>
         <button id="packageBtn" class="icon-btn" type="button" title="Teslim Paketi Olustur" aria-label="Teslim Paketi Olustur">
           <svg viewBox="0 0 24 24" focusable="false"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
         </button>
@@ -50,7 +55,56 @@
           <span id="saveState" class="state-pill muted">Hazir</span>
         </div>
         <textarea id="requestInput" spellcheck="false" placeholder="Ne yaptirmak istedigini buraya yaz. Ornek: Modern admin panel gelistir, kullanici listesi, ayarlar ve rapor ekranlari olsun."></textarea>
-        <div class="source-box" aria-labelledby="sourceTitle">
+        <div class="wizard-box" aria-labelledby="wizardTitle">
+          <div class="source-head">
+            <div>
+              <p class="eyebrow">Sihirbaz</p>
+              <h3 id="wizardTitle">Workflow olustur</h3>
+            </div>
+            <span id="wizardState" class="state-pill muted">Secim bekliyor</span>
+          </div>
+          <div class="wizard-grid">
+            <label>
+              <span>Proje tipi</span>
+              <select id="wizardProjectType">
+                <option value="Yeni web uygulamasi">Yeni web uygulamasi</option>
+                <option value="Mevcut projeyi gelistir">Mevcut projeyi gelistir</option>
+                <option value="Admin panel / SaaS">Admin panel / SaaS</option>
+                <option value="Python masaustu">Python masaustu</option>
+                <option value="Bugfix / test odakli">Bugfix / test odakli</option>
+              </select>
+            </label>
+            <label>
+              <span>Hedef platform</span>
+              <select id="wizardPlatform">
+                <option value="Web">Web</option>
+                <option value="Windows">Windows</option>
+                <option value="Local HTML">Local HTML</option>
+                <option value="Python">Python</option>
+              </select>
+            </label>
+            <label>
+              <span>Tasarim tarzi</span>
+              <select id="wizardDesign">
+                <option value="Sade ve profesyonel">Sade ve profesyonel</option>
+                <option value="Modern dashboard">Modern dashboard</option>
+                <option value="Koyu tema">Koyu tema</option>
+                <option value="Kurumsal">Kurumsal</option>
+              </select>
+            </label>
+            <label>
+              <span>Test beklentisi</span>
+              <select id="wizardTestExpectation">
+                <option value="Build ve smoke test">Build ve smoke test</option>
+                <option value="Pytest / unit test">Pytest / unit test</option>
+                <option value="Manuel kontrol yeterli">Manuel kontrol yeterli</option>
+                <option value="Sadece test ve bugfix">Sadece test ve bugfix</option>
+              </select>
+            </label>
+          </div>
+          <button id="wizardApplyBtn" class="btn secondary" type="button">Workflow Olustur</button>
+        </div>
+        <div class="source-box expert-only" aria-labelledby="sourceTitle">
           <div class="source-head">
             <div>
               <p class="eyebrow">Kaynak</p>
@@ -74,7 +128,7 @@
             <span id="sourceSummary" class="source-summary">Dosya sec, klasor sec veya yol gir.</span>
           </div>
         </div>
-        <div class="source-box smart-box" aria-labelledby="smartTitle">
+        <div class="source-box smart-box expert-only" aria-labelledby="smartTitle">
           <div class="source-head">
             <div>
               <p class="eyebrow">Akilli Orkestrasyon</p>
@@ -108,20 +162,20 @@
             Akilli Devam
           </button>
         </div>
-        <div class="secondary-actions">
+        <div class="secondary-actions expert-only">
           <button id="saveRequestBtn" class="btn quiet" type="button">Istek Kaydet</button>
           <button id="repairStateBtn" class="btn quiet" type="button">Durumu Toparla</button>
           <button id="stopBtn" class="btn danger" type="button">Durdur</button>
         </div>
-        <div class="form-row">
+        <div class="form-row expert-only">
           <label for="startIndex">Baslangic adimi</label>
           <select id="startIndex"></select>
         </div>
-        <label class="switch-row">
+        <label class="switch-row expert-only">
           <input id="checkpointToggle" type="checkbox" checked>
           <span>Checkpointlerde karar bekle</span>
         </label>
-        <div class="template-box">
+        <div class="template-box expert-only">
           <label for="workflowTemplateSelect">Workflow sablonu</label>
           <div class="template-row">
             <select id="workflowTemplateSelect" aria-label="Workflow sablonu"></select>
@@ -137,6 +191,15 @@
             <button data-decision="continue" class="btn primary" type="button">Devam</button>
             <button data-decision="retry" class="btn secondary" type="button">Tekrarla</button>
             <button data-decision="stop" class="btn danger" type="button">Durdur</button>
+          </div>
+        </div>
+        <div id="errorActionsBox" class="error-actions hidden" aria-live="polite">
+          <strong>Hata cozumleri</strong>
+          <div class="error-action-grid">
+            <button class="btn secondary" type="button" data-error-action="claude_fix">Claude ile Duzelt</button>
+            <button class="btn quiet" type="button" data-error-action="codex_review">Codex'e Kontrol Ettir</button>
+            <button class="btn quiet" type="button" data-error-action="restore_last_snapshot">Son Snapshot'a Don</button>
+            <button class="btn quiet" type="button" data-error-action="run_tests">Testleri Tekrar Calistir</button>
           </div>
         </div>
       </section>
@@ -182,7 +245,7 @@
             <pre id="lastOutputPreview">Cikti olusunca burada kisa onizleme gorunur.</pre>
           </div>
         </div>
-        <div id="taskMonitorBox" class="task-monitor hidden">
+        <div id="taskMonitorBox" class="task-monitor hidden expert-only">
           <div class="tm-header">
             <h3>Canli Is Izleyici (Task Monitor)</h3>
             <span id="tmStatusBadge" class="state-pill">Normal</span>
@@ -250,6 +313,7 @@
             </select>
           </div>
         </div>
+        <div id="jobBoard" class="job-board" aria-live="polite"></div>
         <div id="workflowList" class="timeline-list"></div>
       </section>
 

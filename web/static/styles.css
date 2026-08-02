@@ -224,6 +224,30 @@ svg {
   background: var(--surface-hover);
 }
 
+.icon-btn.active {
+  border-color: rgba(34, 197, 94, 0.48);
+  color: #bbf7d0;
+  background: var(--green-soft);
+}
+
+.mode-toggle {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-soft);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 11px;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.mode-toggle:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: var(--cyan);
+  background: var(--surface-hover);
+}
+
 .dashboard {
   display: grid;
   grid-template-columns: minmax(300px, 360px) minmax(560px, 1fr);
@@ -309,6 +333,42 @@ svg {
   color: var(--muted);
 }
 
+.quality-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  max-width: 210px;
+  padding: 3px 9px;
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  border-radius: 999px;
+  color: #ffd99b;
+  background: var(--amber-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quality-pill.hazir {
+  border-color: rgba(34, 197, 94, 0.46);
+  color: #bbf7d0;
+  background: var(--green-soft);
+}
+
+.quality-pill.eksik,
+.quality-pill.kontrol-gerekli {
+  border-color: rgba(245, 158, 11, 0.46);
+  color: #ffd99b;
+  background: var(--amber-soft);
+}
+
+.quality-pill.test-gecmedi {
+  border-color: rgba(248, 113, 113, 0.52);
+  color: #fecaca;
+  background: var(--red-soft);
+}
+
 textarea,
 input,
 select {
@@ -363,6 +423,7 @@ input[type="checkbox"] {
 }
 
 .source-box,
+.wizard-box,
 .template-box {
   margin-top: 10px;
   padding: 10px;
@@ -413,6 +474,35 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
+.wizard-box {
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.wizard-grid label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.wizard-grid label span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wizard-box .btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
 @media (min-width: 941px) {
   .command-panel {
     display: grid;
@@ -431,9 +521,10 @@ input[type="checkbox"] {
     min-height: 172px;
   }
 
+  .command-panel .wizard-box,
   .command-panel .source-box {
     grid-column: 2 / 3;
-    grid-row: 2 / 8;
+    grid-row: auto;
     margin-top: 0;
   }
 
@@ -642,6 +733,26 @@ input[type="checkbox"] {
   background: var(--red-soft);
 }
 
+.error-actions {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  border-radius: 8px;
+  background: var(--red-soft);
+}
+
+.error-actions strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #fecaca;
+}
+
+.error-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .issue-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -725,6 +836,108 @@ input[type="checkbox"] {
 
 .flow-tools {
   min-width: 0;
+}
+
+.job-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.job-column {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--chrome);
+}
+
+.job-column-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.job-column-head strong {
+  font-size: 12px;
+}
+
+.job-column-head span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: var(--text-soft);
+  background: var(--surface-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.job-column-body {
+  display: grid;
+  gap: 8px;
+  min-height: 68px;
+  padding: 8px;
+}
+
+.job-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.job-card strong,
+.job-card span,
+.job-card small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-card strong {
+  font-size: 12px;
+}
+
+.job-card span,
+.job-card small {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.job-card.calisiyor {
+  border-color: rgba(56, 189, 248, 0.48);
+  background: var(--cyan-soft);
+}
+
+.job-card.kontrol {
+  border-color: rgba(245, 158, 11, 0.48);
+  background: var(--amber-soft);
+}
+
+.job-card.tamamlandi {
+  border-color: rgba(34, 197, 94, 0.42);
+  background: var(--green-soft);
+}
+
+.job-empty {
+  display: grid;
+  place-items: center;
+  min-height: 40px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
 }
 
 .timeline-list {
@@ -1588,4 +1801,58 @@ th {
 }
 .quality-row:hover {
   background: var(--surface-3) !important;
+}
+
+body.mode-simple .dashboard {
+  grid-template-columns: minmax(0, 780px);
+  grid-template-rows: auto auto;
+  justify-content: center;
+}
+
+body.mode-simple .command-panel {
+  display: block;
+  grid-column: 1 / 2;
+  grid-row: 1 / 2;
+  align-self: start;
+}
+
+body.mode-simple .overview-panel {
+  display: block;
+  grid-column: 1 / 2;
+  grid-row: 2 / 3;
+  padding: 12px;
+}
+
+body.mode-simple .flow-panel,
+body.mode-simple .workspace-panel,
+body.mode-simple .expert-only,
+body.mode-simple #resumeBtn,
+body.mode-simple #smartResumeBtn {
+  display: none !important;
+}
+
+body.mode-simple .primary-actions {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.mode-simple textarea {
+  min-height: 180px;
+}
+
+body.mode-simple .source-summary {
+  white-space: normal;
+}
+
+@media (max-width: 1080px) {
+  .job-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .wizard-grid,
+  .error-action-grid,
+  .job-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

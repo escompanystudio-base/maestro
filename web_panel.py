@@ -45,6 +45,7 @@ from orkestra import (
     AGENT_ROLES,
     ANTIGRAVITY_OUTPUT_EXIT_GRACE_SECONDS,
     agent_for_role,
+    assess_run_quality,
     append_project_memory,
     append_chat_entry,
     append_event,
@@ -63,6 +64,7 @@ from orkestra import (
     check_inputs,
     create_delivery_package,
     list_delivery_packages,
+    compose_wizard_brief,
     create_snapshot,
     ensure_chat_file,
     expected_agent_commands_label,
@@ -86,6 +88,7 @@ from orkestra import (
     read_user_request,
     resolve_command,
     resolve_project_dir,
+    restore_snapshot,
     restore_snapshot_files,
     run_agent_comparison,
     save_generated_workflow,
@@ -477,6 +480,7 @@ class MaestroWebPanel:
         self.log_lines: deque[str] = deque(maxlen=1200)
         self.stage_durations: dict[int, float] = {}
         self.session_workflow_data: dict[str, Any] | None = None
+        self.last_test_result: dict[str, Any] | None = None
         
         self.proc_started_at: float | None = None
         self.last_output_at: float | None = None
@@ -1598,6 +1602,7 @@ class MaestroWebPanel:
                 "orchestration": self.orchestration_payload(),
                 "diagnostics": self.diagnostics_payload(),
                 "workflowTemplates": self.workflow_templates_payload(),
+                "resultQuality": self._result_quality_payload(stages, payload["status"], payload["lastError"]),
             }
         )
         return payload
@@ -1775,14 +1780,7 @@ class MaestroWebPanel:
             ],
         }
 
-    def apply_workflow_template(self, template_id: str) -> dict[str, Any]:
-        if self.running:
-            raise RuntimeError("Akis calisirken workflow sablonu degistirilemez.")
-        template = WORKFLOW_TEMPLATES.get(template_id)
-        if not template:
-            raise ValueError("Bilinmeyen workflow sablonu.")
-        data = json.loads(json.dumps(template["data"], ensure_ascii=False))
-        save_generated_workflow(self.project_dir, data)
+    def _reset_ready_state(self, detail: str) -> None:
         state_file = self.project_dir / STATE_FILE
         if state_file.exists():
             state_file.unlink()
@@ -1791,11 +1789,232 @@ class MaestroWebPanel:
             self.current_index = None
             self.stage_durations.clear()
             self.status = "ready"
-            self.status_detail = f"Workflow sablonu: {template['label']}"
+            self.status_detail = detail
             self.last_error = ""
-        self._log(f"Workflow sablonu uygulandi: {template['label']}")
-        append_chat_entry(self.project_dir, "Orkestra", f"Workflow sablonu uygulandi: {template['label']}")
+            self.last_test_result = None
+
+    def _apply_generated_workflow(self, data: dict[str, Any], *, detail: str, chat_message: str) -> Path:
+        if self.running:
+            raise RuntimeError("Akis calisirken workflow degistirilemez.")
+        path = save_generated_workflow(self.project_dir, data)
+        self._reset_ready_state(detail)
+        self._log(detail)
+        append_chat_entry(self.project_dir, "Orkestra", chat_message)
+        return path
+
+    def apply_workflow_template(self, template_id: str) -> dict[str, Any]:
+        if self.running:
+            raise RuntimeError("Akis calisirken workflow sablonu degistirilemez.")
+        template = WORKFLOW_TEMPLATES.get(template_id)
+        if not template:
+            raise ValueError("Bilinmeyen workflow sablonu.")
+        data = json.loads(json.dumps(template["data"], ensure_ascii=False))
+        self._apply_generated_workflow(
+            data,
+            detail=f"Workflow sablonu: {template['label']}",
+            chat_message=f"Workflow sablonu uygulandi: {template['label']}",
+        )
         return self.workflow_templates_payload()
+
+    def _wizard_template_id(self, project_type: str, platform: str, test_expectation: str) -> str:
+        project_text = project_type.lower()
+        platform_text = platform.lower()
+        test_text = test_expectation.lower()
+        haystack = f"{project_text} {platform_text} {test_text}"
+        if any(key in project_text for key in ("bug", "hata", "test", "kontrol", "fix")) or any(
+            key in test_text for key in ("sadece test", "bugfix", "hata odakli")
+        ):
+            return "test-fix"
+        if any(key in haystack for key in ("masaustu", "desktop", "windows", "tkinter", "pyside", "python")):
+            return "desktop-python"
+        if any(key in haystack for key in ("mevcut", "var olan", "refactor", "gelistir")):
+            return "existing-app"
+        return "default"
+
+    def wizard_workflow_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.running:
+            raise RuntimeError("Akis calisirken sihirbaz workflow'u degistirilemez.")
+        request = str(payload.get("request", "") or read_user_request(self.project_dir))
+        project_type = str(payload.get("projectType", "")).strip()
+        platform = str(payload.get("platform", "")).strip()
+        design = str(payload.get("design", "")).strip()
+        test_expectation = str(payload.get("testExpectation", "")).strip()
+        brief = compose_wizard_brief(request, project_type, platform, design, test_expectation)
+        if not brief:
+            raise ValueError("Sihirbaz icin once istek yaz.")
+
+        template_id = self._wizard_template_id(project_type, platform, test_expectation)
+        template = WORKFLOW_TEMPLATES[template_id]
+        data = json.loads(json.dumps(template["data"], ensure_ascii=False))
+        data["summary"] = f"Sihirbaz akisi: {project_type or template['label']}"
+        data["project_type"] = f"wizard-{data.get('project_type') or template_id}"
+        data["brief_hash"] = hashlib.sha256(brief.encode("utf-8", errors="replace")).hexdigest()[:16]
+        picks = [
+            f"Proje tipi: {project_type or '-'}",
+            f"Hedef platform: {platform or '-'}",
+            f"Tasarim tarzi: {design or '-'}",
+            f"Test beklentisi: {test_expectation or '-'}",
+        ]
+        prefix = "[Sihirbaz Workflow]\n" + "\n".join(f"- {item}" for item in picks)
+        for stage in data["stages"]:
+            stage["prompt"] = f"{prefix}\n\n{stage['prompt']}"
+
+        self._apply_generated_workflow(
+            data,
+            detail=f"Sihirbaz workflow hazir: {template['label']}",
+            chat_message=(
+                "Sihirbaz secimleriyle workflow olusturuldu.\n"
+                f"- Sablon: {template['label']}\n"
+                + "\n".join(f"- {item}" for item in picks)
+            ),
+        )
+        self.save_request(brief)
+        return {
+            "ok": True,
+            "brief": brief,
+            "templateId": template_id,
+            "templateLabel": template["label"],
+            "status": self.status_payload(),
+        }
+
+    def _result_quality_payload(self, stages: list[dict[str, Any]], status: str, error: str) -> dict[str, str]:
+        quality = assess_run_quality(self.project_dir, stages, status, error)
+        report = self.last_test_result
+        report_path = self.project_dir / TEST_REPORT_FILE
+        if report is None and report_path.exists():
+            try:
+                raw = json.loads(report_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    report = raw
+            except Exception:
+                report = None
+        report_current = report_path.exists()
+        workflow_path = self.project_dir / GENERATED_WORKFLOW_FILE
+        if report_current and workflow_path.exists():
+            try:
+                report_current = report_path.stat().st_mtime >= workflow_path.stat().st_mtime
+            except OSError:
+                report_current = True
+        if report_current and isinstance(report, dict) and report.get("status") == "failed":
+            return {"label": "test gecmedi", "category": "test-gecmedi"}
+        return quality
+
+    def _error_workflow_data(self, action: str) -> dict[str, Any]:
+        error = self.last_error or "Son hata kaydi yok."
+        log_tail = self._recent_log_text()[-3000:]
+        context = (
+            "[Hata Aksiyonu]\n"
+            f"Son durum: {self.status}\n"
+            f"Son hata: {error}\n\n"
+            "[Log Ozeti]\n"
+            f"{log_tail or '-'}"
+        )
+        if action == "codex_review":
+            return {
+                "summary": "Codex hata kontrol akisi",
+                "project_type": "error-codex-review",
+                "brief_hash": hashlib.sha256(context.encode("utf-8", errors="replace")).hexdigest()[:16],
+                "stages": [
+                    {
+                        "name": "Hata Siniflandirma",
+                        "agent": "codex",
+                        "prompt": f"{context}\n\nistek.md dosyasini oku. Hatayi sebep, etki ve tekrar uretme adimlariyla kontrol.md dosyasina yaz. Kod degistirme.",
+                        "reads": [REQUEST_FILE],
+                        "writes": ["kontrol.md"],
+                        "checkpoint": False,
+                        "timeout": 1200,
+                        "fallback_agent": "claude",
+                    },
+                    {
+                        "name": "Test Komutlari",
+                        "agent": "codex",
+                        "prompt": "kontrol.md dosyasini oku. Calistirilmasi gereken yerel test ve smoke komutlarini test_raporu.json dosyasina JSON olarak yaz.",
+                        "reads": ["kontrol.md"],
+                        "writes": [TEST_REPORT_FILE],
+                        "checkpoint": False,
+                        "timeout": 1200,
+                        "fallback_agent": "claude",
+                    },
+                    {
+                        "name": "Son Kontrol",
+                        "agent": "codex",
+                        "prompt": "kontrol.md ve test_raporu.json dosyalarini oku. Kullaniciya uygulanabilir kontrol sonucunu kontrol.md dosyasinda netlestir.",
+                        "reads": ["kontrol.md", TEST_REPORT_FILE],
+                        "writes": ["kontrol.md"],
+                        "checkpoint": False,
+                        "timeout": 1200,
+                        "fallback_agent": "claude",
+                    },
+                ],
+            }
+        return {
+            "summary": "Claude hata duzeltme akisi",
+            "project_type": "error-claude-fix",
+            "brief_hash": hashlib.sha256(context.encode("utf-8", errors="replace")).hexdigest()[:16],
+            "stages": [
+                {
+                    "name": "Hata Teshisi",
+                    "agent": "codex",
+                    "prompt": f"{context}\n\nistek.md dosyasini oku. Duzeltme icin kisa teknik teshisi kontrol.md dosyasina yaz.",
+                    "reads": [REQUEST_FILE],
+                    "writes": ["kontrol.md"],
+                    "checkpoint": False,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                },
+                {
+                    "name": "Claude Duzeltme",
+                    "agent": "claude",
+                    "prompt": "istek.md ve kontrol.md dosyalarini oku. Hatayi projede duzelt, gerekiyorsa kodu guncelle. Yapilanlari rapor.md dosyasina yaz.",
+                    "reads": [REQUEST_FILE, "kontrol.md"],
+                    "writes": ["rapor.md"],
+                    "checkpoint": False,
+                    "timeout": 1800,
+                    "fallback_agent": "codex",
+                },
+                {
+                    "name": "Duzeltme Kontrolu",
+                    "agent": "codex",
+                    "prompt": "rapor.md dosyasini ve projedeki son degisiklikleri kontrol et. Eksik/risk/test onerilerini kontrol.md dosyasina yaz.",
+                    "reads": ["rapor.md"],
+                    "writes": ["kontrol.md"],
+                    "checkpoint": False,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                },
+            ],
+        }
+
+    def error_action_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        action = str(payload.get("action", "")).strip().lower()
+        if action in {"run_tests", "rerun_tests"}:
+            result = self.run_project_tests(target=str(payload.get("target", "")))
+            return {"ok": True, "message": "Testler calisti.", "result": result, "status": self.status_payload()}
+        if self.running:
+            raise RuntimeError("Akis calisirken hata aksiyonu baslatilamaz.")
+        if action == "restore_last_snapshot":
+            snapshots = list_snapshots(self.project_dir)
+            if not snapshots:
+                raise ValueError("Geri donulecek snapshot bulunamadi.")
+            snap_id = str(snapshots[0].get("id", ""))
+            restore_snapshot(self.project_dir, snap_id)
+            self._reset_ready_state(f"Snapshot'a donuldu: {snap_id}")
+            append_chat_entry(self.project_dir, "Orkestra", f"Son snapshot'a donuldu: {snap_id}")
+            return {"ok": True, "message": f"Snapshot'a donuldu: {snap_id}", "status": self.status_payload()}
+        if action not in {"claude_fix", "codex_review"}:
+            raise ValueError("Bilinmeyen hata aksiyonu.")
+
+        data = self._error_workflow_data(action)
+        label = "Claude duzeltme" if action == "claude_fix" else "Codex kontrol"
+        self._apply_generated_workflow(
+            data,
+            detail=f"{label} workflow hazir",
+            chat_message=f"{label} hata aksiyonu icin workflow olusturuldu.",
+        )
+        if bool(payload.get("autoStart", True)):
+            self.start_run(start_idx=1, reset_state=True, use_checkpoints=False)
+            return {"ok": True, "message": f"{label} akisi baslatildi.", "status": self.status_payload()}
+        return {"ok": True, "message": f"{label} workflow hazir.", "status": self.status_payload()}
 
     def run_project_tests(self, target: str = "") -> dict[str, Any]:
         target_path = self.project_dir
@@ -2078,6 +2297,10 @@ class MaestroRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json(self.app.suggest_agent_payload(str(payload.get("text", ""))))
             if parsed.path == "/api/orchestration/compare":
                 return self._send_json(self.app.compare_agents_payload(payload))
+            if parsed.path == "/api/ux/wizard-workflow":
+                return self._send_json(self.app.wizard_workflow_payload(payload))
+            if parsed.path == "/api/ux/error-action":
+                return self._send_json(self.app.error_action_payload(payload))
             if parsed.path == "/api/source/scan":
                 source_path = str(payload.get("path", ""))
                 meta = self.app.scan_source_path(source_path)
