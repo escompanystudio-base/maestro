@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import threading
 import time
 import urllib.error
@@ -29,6 +30,18 @@ def _serve(server) -> threading.Thread:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return thread
+
+
+def _post_json(url: str, payload: dict, timeout: int = 5) -> dict:
+    raw = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=raw,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def test_auth_token_required_and_accepted(project_dir):
@@ -119,6 +132,54 @@ def test_history_api_endpoints(project_dir):
             with urllib.request.urlopen(f"{base}{endpoint}", timeout=3) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
             assert data["ok"] and len(data[key]) >= 1, endpoint
+    finally:
+        server.shutdown()
+        shutdown_server(server)
+
+
+def test_orchestration_api_memory_context_and_suggest(project_dir):
+    (project_dir / "README.md").write_text("# Maestro test\n", encoding="utf-8")
+    server = create_server("127.0.0.1", 0, project_dir)
+    _serve(server)
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        memory = _post_json(f"{base}/api/orchestration/memory", {"note": "Stack: FastAPI"})
+        assert "FastAPI" in memory["orchestration"]["memory"]
+
+        summary = _post_json(f"{base}/api/orchestration/context-summary", {})
+        assert summary["summary"]["name"] == orkestra.CONTEXT_SUMMARY_FILE
+        assert (project_dir / orkestra.CONTEXT_SUMMARY_FILE).exists()
+
+        suggestion = _post_json(f"{base}/api/orchestration/suggest", {"text": "UI arayuz tasarimi"})
+        assert suggestion["agent"] == "gemini"
+
+        with urllib.request.urlopen(f"{base}/api/orchestration", timeout=3) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        assert payload["ok"] and payload["orchestration"]["contextSummary"]["exists"] is True
+    finally:
+        server.shutdown()
+        shutdown_server(server)
+
+
+def test_orchestration_compare_api_with_fake_agents(project_dir, monkeypatch):
+    fake = [sys.executable, str(FAKE_AGENT), "{prompt}"]
+    monkeypatch.setattr(orkestra, "AGENT_COMMANDS", {"codex": list(fake), "claude": list(fake)})
+    monkeypatch.setattr(orkestra, "find_tool", lambda tool: sys.executable if tool in {"codex", "claude"} else None)
+
+    server = create_server("127.0.0.1", 0, project_dir)
+    _serve(server)
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        data = _post_json(
+            f"{base}/api/orchestration/compare",
+            {"prompt": "WRITE:cikti.md karsilastir", "agents": ["codex", "claude"], "writes": ["cikti.md"], "timeout": 30},
+            timeout=15,
+        )
+        rows = data["comparison"]["results"]
+        assert {row["agent"] for row in rows} == {"codex", "claude"}
+        assert all(row["ok"] for row in rows)
+        assert data["comparison"]["report"] == "karsilastirma.md"
+        assert (project_dir / "karsilastirma" / "codex" / "cikti.md").exists()
     finally:
         server.shutdown()
         shutdown_server(server)

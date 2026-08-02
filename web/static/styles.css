@@ -1398,6 +1398,30 @@ th {
   word-break: break-all;
 }
 
+.smart-box {
+  gap: 10px;
+}
+
+.mini-textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.smart-output {
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 150px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 1320px) {
   .dashboard {
     grid-template-columns: minmax(280px, 330px) minmax(0, 1fr);
