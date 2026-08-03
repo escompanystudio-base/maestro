@@ -20,11 +20,14 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
 import tomllib
+import urllib.error
+import urllib.request
 import webbrowser
 from collections import Counter, deque
 from datetime import datetime
@@ -122,6 +125,7 @@ OUTPUT_FILES = [
     "kontrol.md",
     "test_raporu.json",
     "kalite_raporu.json",
+    "web_qa_raporu.json",
     "kabul_kriterleri.md",
     "kabul_kontrol.md",
     GENERATED_WORKFLOW_FILE,
@@ -161,6 +165,7 @@ SOURCE_META_FILE = "source_context.json"
 SOURCE_IMPORT_DIR = "source_import"
 TEST_REPORT_FILE = "test_raporu.json"
 QUALITY_REPORT_FILE = "kalite_raporu.json"
+WEB_AUDIT_REPORT_FILE = "web_qa_raporu.json"
 ACCEPTANCE_FILE = "kabul_kriterleri.md"
 ACCEPTANCE_REPORT_FILE = "kabul_kontrol.md"
 MAX_SOURCE_FILES = 80
@@ -496,6 +501,10 @@ class MaestroWebPanel:
         self.proc_started_at: float | None = None
         self.last_output_at: float | None = None
         self.current_stage_writes: list[str] = []
+        self.preview_proc: subprocess.Popen[str] | None = None
+        self.preview_url = ""
+        self.preview_root: Path | None = None
+        self.preview_log_path: Path | None = None
 
     # ---------- workflow/state ----------
 
@@ -544,14 +553,38 @@ class MaestroWebPanel:
                 + f"\n\nKullanici istegini madde madde kabul kriterlerine cevir ve {ACCEPTANCE_FILE} dosyasina yaz."
             )
 
+        insert_at = 1
+        for idx, stage in enumerate(stages):
+            haystack = f"{stage.get('name', '')} {stage.get('prompt', '')}".lower()
+            if any(key in haystack for key in ("kod", "code", "implement", "bugfix", "duzelt", "düzelt")):
+                insert_at = idx + 1
+                break
+
+        has_ui_polish = any("ui polish" in stage.get("name", "").lower() or "arayuz polish" in stage.get("name", "").lower() for stage in stages)
+        ui_polish_ok = "desktop" not in project_type.lower() and "test-fix" not in project_type.lower()
+        if ui_polish_ok and not has_ui_polish and len(stages) < 8:
+            stages.insert(
+                insert_at,
+                {
+                    "name": "UI Polish",
+                    "agent": "gemini",
+                    "prompt": (
+                        f"{REQUEST_FILE}, tasarim.md, rapor.md ve {ACCEPTANCE_FILE} dosyalarini oku. "
+                        "Sadece arayuz kalitesine odaklan: spacing, renk kontrasti, mobil gorunum, bos/tasan alan, "
+                        "okunabilirlik ve hizli kullanilabilirlik sorunlarini duzelt. Kucuk CSS/layout/erisilebilirlik "
+                        "duzeltmeleri yap; kapsam buyutme. Sonucu kontrol.md dosyasina yaz."
+                    ),
+                    "reads": [REQUEST_FILE, "tasarim.md", "rapor.md", ACCEPTANCE_FILE],
+                    "writes": ["kontrol.md"],
+                    "checkpoint": True,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                },
+            )
+            insert_at += 1
+
         has_test_generation = any("test uret" in stage.get("name", "").lower() or "test üret" in stage.get("name", "").lower() for stage in stages)
         if not has_test_generation and len(stages) < 8:
-            insert_at = 1
-            for idx, stage in enumerate(stages):
-                haystack = f"{stage.get('name', '')} {stage.get('prompt', '')}".lower()
-                if any(key in haystack for key in ("kod", "code", "implement", "bugfix", "duzelt", "düzelt")):
-                    insert_at = idx + 1
-                    break
             stages.insert(
                 insert_at,
                 {
@@ -1684,6 +1717,7 @@ class MaestroWebPanel:
                 "workflowTemplates": self.workflow_templates_payload(),
                 "resultQuality": self._result_quality_payload(stages, payload["status"], payload["lastError"]),
                 "projectQuality": self.quality_summary_payload(),
+                "webApp": self.webapp_summary_payload(),
             }
         )
         return payload
@@ -2569,6 +2603,458 @@ class MaestroWebPanel:
             message = "Test uretme workflow hazir."
         return {"ok": True, "message": message, "status": self.status_payload()}
 
+    def prepare_ui_polish_workflow(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        if self.running:
+            raise RuntimeError("Akis calisirken UI polish workflow'u hazirlanamaz.")
+        data = {
+            "summary": "Kodlama sonrasi UI polish akisi",
+            "project_type": "quality-ui-polish",
+            "brief_hash": hashlib.sha256(read_user_request(self.project_dir).encode("utf-8", errors="replace")).hexdigest()[:16],
+            "stages": [
+                {
+                    "name": "UI Audit Hazirligi",
+                    "agent": "codex",
+                    "prompt": f"{REQUEST_FILE}, tasarim.md, rapor.md ve {ACCEPTANCE_FILE} dosyalarini oku. UI risklerini kontrol.md icin madde madde cikar.",
+                    "reads": [REQUEST_FILE, "tasarim.md", "rapor.md", ACCEPTANCE_FILE],
+                    "writes": ["kontrol.md"],
+                    "checkpoint": False,
+                    "timeout": 900,
+                    "fallback_agent": "claude",
+                },
+                {
+                    "name": "UI Polish",
+                    "agent": "gemini",
+                    "prompt": (
+                        "Sadece tasarim kalitesi uzerinde calis: spacing, renk/kontrast, responsive gorunum, "
+                        "bos/tasan alan, hizli taranabilirlik ve erisilebilirlik. Kapsami buyutmeden kucuk CSS/layout "
+                        "duzeltmeleri yap ve kontrol.md dosyasini guncelle."
+                    ),
+                    "reads": [REQUEST_FILE, "tasarim.md", "rapor.md", "kontrol.md"],
+                    "writes": ["kontrol.md"],
+                    "checkpoint": False,
+                    "timeout": 1500,
+                    "fallback_agent": "claude",
+                },
+                {
+                    "name": "Responsive Kontrol",
+                    "agent": "codex",
+                    "prompt": (
+                        f"UI polish sonrasi 375, 768 ve 1440px gorunumlerini kontrol et. "
+                        f"Varsa screenshot/console bulgularini {WEB_AUDIT_REPORT_FILE} dosyasina yaz."
+                    ),
+                    "reads": ["kontrol.md", WEB_AUDIT_REPORT_FILE],
+                    "writes": [WEB_AUDIT_REPORT_FILE],
+                    "checkpoint": False,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                },
+            ],
+        }
+        self._apply_generated_workflow(
+            data,
+            detail="UI polish workflow hazir",
+            chat_message="Kodlama sonrasi UI polish ajani icin workflow olusturuldu.",
+        )
+        if bool(payload.get("autoStart", False)):
+            self.start_run(start_idx=1, reset_state=True, use_checkpoints=False)
+            message = "UI polish akisi baslatildi."
+        else:
+            message = "UI polish workflow hazir."
+        return {"ok": True, "message": message, "status": self.status_payload()}
+
+    def _find_free_port(self, start: int = 5173) -> int:
+        for port in range(start, start + 120):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.bind(("127.0.0.1", port))
+                except OSError:
+                    continue
+                return port
+        raise RuntimeError("Preview icin bos port bulunamadi.")
+
+    def _candidate_web_roots(self, target: str = "") -> list[Path]:
+        roots: list[Path] = []
+
+        def add(path: Path) -> None:
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(self.project_dir)
+            except Exception:
+                return
+            if resolved.is_dir() and resolved not in roots:
+                roots.append(resolved)
+
+        if target:
+            try:
+                add(self.safe_file_path(target))
+            except ValueError:
+                pass
+        add(self.project_dir / "project")
+        add(self.project_dir)
+        markers = {"package.json", "index.html", "app.py", "main.py"}
+        scanned = 0
+        for path in self.project_dir.rglob("*"):
+            if scanned >= 700:
+                break
+            scanned += 1
+            if not path.is_file() or path.name not in markers:
+                continue
+            try:
+                rel_parts = path.relative_to(self.project_dir).parts
+            except ValueError:
+                continue
+            if any(part in SKIP_DIRS for part in rel_parts[:-1]):
+                continue
+            add(path.parent)
+        return roots
+
+    def _load_package_json(self, root: Path) -> dict[str, Any]:
+        try:
+            raw = json.loads((root / "package.json").read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    def _detect_webapp(self, root: Path, port: int) -> dict[str, Any] | None:
+        npm = find_tool("npm") or "npm"
+        package_json = root / "package.json"
+        if package_json.exists():
+            package = self._load_package_json(root)
+            scripts = {str(key): str(value) for key, value in (package.get("scripts") or {}).items()}
+            deps: dict[str, Any] = {}
+            for key in ("dependencies", "devDependencies"):
+                value = package.get(key)
+                if isinstance(value, dict):
+                    deps.update(value)
+            haystack = " ".join([*scripts.values(), *deps.keys()]).lower()
+            stack = "vite" if "vite" in haystack else "next" if "next" in haystack else "react" if "react" in haystack else "node"
+            build_cmd = [npm, "run", "build"] if "build" in scripts else []
+            env: dict[str, str] = {}
+            if "preview" in scripts:
+                preview_cmd = [npm, "run", "preview", "--", "--host", "127.0.0.1", "--port", str(port)]
+            elif "dev" in scripts and stack == "next":
+                preview_cmd = [npm, "run", "dev", "--", "-H", "127.0.0.1", "-p", str(port)]
+            elif "dev" in scripts:
+                preview_cmd = [npm, "run", "dev", "--", "--host", "127.0.0.1", "--port", str(port)]
+            elif "start" in scripts and stack == "next":
+                preview_cmd = [npm, "run", "start", "--", "-H", "127.0.0.1", "-p", str(port)]
+            elif "start" in scripts:
+                preview_cmd = [npm, "start"]
+                env = {"HOST": "127.0.0.1", "PORT": str(port), "BROWSER": "none"}
+            else:
+                return None
+            return {
+                "root": root,
+                "stack": stack,
+                "kind": "node",
+                "url": f"http://127.0.0.1:{port}",
+                "port": port,
+                "buildCommand": build_cmd,
+                "previewCommand": preview_cmd,
+                "env": env,
+            }
+
+        for file_name in ("app.py", "main.py"):
+            path = root / file_name
+            if not path.exists():
+                continue
+            text = self._read_small_text(path, limit=120_000)
+            module = path.stem
+            if "FastAPI(" in text or "from fastapi" in text:
+                return {
+                    "root": root,
+                    "stack": "fastapi",
+                    "kind": "python",
+                    "url": f"http://127.0.0.1:{port}",
+                    "port": port,
+                    "buildCommand": [],
+                    "previewCommand": [sys.executable, "-m", "uvicorn", f"{module}:app", "--host", "127.0.0.1", "--port", str(port)],
+                    "env": {},
+                }
+            if "Flask(" in text or "from flask" in text:
+                return {
+                    "root": root,
+                    "stack": "flask",
+                    "kind": "python",
+                    "url": f"http://127.0.0.1:{port}",
+                    "port": port,
+                    "buildCommand": [],
+                    "previewCommand": [sys.executable, "-m", "flask", "--app", module, "run", "--host", "127.0.0.1", "--port", str(port)],
+                    "env": {},
+                }
+
+        if (root / "index.html").exists():
+            return {
+                "root": root,
+                "stack": "static",
+                "kind": "static",
+                "url": f"http://127.0.0.1:{port}",
+                "port": port,
+                "buildCommand": [],
+                "previewCommand": [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+                "env": {},
+            }
+        return None
+
+    def detect_webapp_payload(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        port = int(payload.get("port") or self._find_free_port())
+        target = str(payload.get("target", "")).strip()
+        candidates: list[dict[str, Any]] = []
+        for root in self._candidate_web_roots(target):
+            detected = self._detect_webapp(root, port)
+            if detected:
+                public = {key: value for key, value in detected.items() if key not in {"root", "env"}}
+                public["root"] = str(root.relative_to(self.project_dir)).replace("\\", "/") or "."
+                candidates.append(public)
+        return {"ok": True, "detected": bool(candidates), "candidates": candidates, "selected": candidates[0] if candidates else None}
+
+    def _wait_for_url(self, url: str, timeout: float = 12.0) -> tuple[bool, str]:
+        deadline = time.time() + timeout
+        last_error = ""
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=1.5) as response:
+                    if response.status < 500:
+                        return True, f"HTTP {response.status}"
+            except urllib.error.HTTPError as exc:
+                if exc.code < 500:
+                    return True, f"HTTP {exc.code}"
+                last_error = f"HTTP {exc.code}"
+            except Exception as exc:
+                last_error = str(exc)
+            time.sleep(0.35)
+        return False, last_error or "Preview yanit vermedi."
+
+    def prepare_web_preview(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        port = int(payload.get("port") or self._find_free_port())
+        target = str(payload.get("target", "")).strip()
+        plan: dict[str, Any] | None = None
+        for root in self._candidate_web_roots(target):
+            plan = self._detect_webapp(root, port)
+            if plan:
+                break
+        if not plan:
+            raise ValueError("Vite/React/Next/Flask/FastAPI veya statik index.html bulunamadi.")
+
+        build_result: dict[str, Any] | None = None
+        if bool(payload.get("build", True)) and plan.get("buildCommand"):
+            build_result = self._run_check("Web build", plan["buildCommand"], cwd=plan["root"], timeout=int(payload.get("buildTimeout") or 180))
+            if build_result["status"] == "failed" and bool(payload.get("failOnBuild", True)):
+                return {"ok": False, "message": "Build basarisiz.", "preview": self._public_preview_plan(plan), "build": build_result}
+
+        self.stop_web_preview()
+        log_dir = self.project_dir / LOG_DIR
+        log_dir.mkdir(exist_ok=True)
+        log_path = log_dir / f"web_preview_{plan['port']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        env = process_env()
+        env.update({str(key): str(value) for key, value in plan.get("env", {}).items()})
+        with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
+            proc = subprocess.Popen(
+                plan["previewCommand"],
+                cwd=plan["root"],
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                **process_kwargs(),
+            )
+        self.preview_proc = proc
+        self.preview_url = str(plan["url"])
+        self.preview_root = plan["root"]
+        self.preview_log_path = log_path
+        ready, detail = self._wait_for_url(self.preview_url, timeout=float(payload.get("timeout") or 12))
+        public = self._public_preview_plan(plan)
+        public["pid"] = proc.pid
+        public["log"] = str(log_path.relative_to(self.project_dir)).replace("\\", "/")
+        public["ready"] = ready
+        public["detail"] = detail
+        self._log(f"Web preview hazirlandi: {self.preview_url} ({detail})")
+        return {"ok": ready, "message": detail, "preview": public, "build": build_result}
+
+    def _public_preview_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "root": str(plan["root"].relative_to(self.project_dir)).replace("\\", "/") or ".",
+            "stack": plan.get("stack", ""),
+            "kind": plan.get("kind", ""),
+            "url": plan.get("url", ""),
+            "port": plan.get("port"),
+            "buildCommand": plan.get("buildCommand") or [],
+            "previewCommand": plan.get("previewCommand") or [],
+        }
+
+    def stop_web_preview(self) -> dict[str, Any]:
+        proc = self.preview_proc
+        stopped = False
+        if proc and proc.poll() is None:
+            kill_process_tree(proc)
+            stopped = True
+        self.preview_proc = None
+        self.preview_url = ""
+        self.preview_root = None
+        self.preview_log_path = None
+        return {"ok": True, "stopped": stopped, "status": self.status_payload()}
+
+    def webapp_summary_payload(self) -> dict[str, Any]:
+        proc = self.preview_proc
+        running = bool(proc and proc.poll() is None)
+        summary = {
+            "previewRunning": running,
+            "previewUrl": self.preview_url if running else "",
+            "previewRoot": str(self.preview_root.relative_to(self.project_dir)).replace("\\", "/") if running and self.preview_root else "",
+            "previewLog": str(self.preview_log_path.relative_to(self.project_dir)).replace("\\", "/") if running and self.preview_log_path else "",
+            "report": {"exists": False, "status": "missing"},
+        }
+        path = self.project_dir / WEB_AUDIT_REPORT_FILE
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                summary["report"] = {
+                    "exists": True,
+                    "status": raw.get("status", "unknown"),
+                    "ranAt": raw.get("ranAt", ""),
+                    "failed": raw.get("failed", 0),
+                    "warnings": raw.get("warnings", 0),
+                    "skipped": raw.get("skipped", 0),
+                }
+            except Exception:
+                summary["report"] = {"exists": True, "status": "failed", "summary": "Web QA raporu okunamadi."}
+        return summary
+
+    def run_webapp_audit(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        url = str(payload.get("url") or self.preview_url).strip()
+        auto_preview: dict[str, Any] | None = None
+        if not url:
+            auto_preview = self.prepare_web_preview({"build": bool(payload.get("build", True)), "target": str(payload.get("target", ""))})
+            if not auto_preview.get("ok"):
+                result = self._write_web_audit_report(
+                    "failed",
+                    [
+                        self._section(
+                            "preview",
+                            "Build + Preview",
+                            [self._quality_row("Preview", "failed", auto_preview.get("message", "Preview baslatilamadi."))],
+                        )
+                    ],
+                    target=".",
+                    url="",
+                )
+                return result
+            url = str(auto_preview.get("preview", {}).get("url") or self.preview_url)
+        if importlib.util.find_spec("playwright"):
+            try:
+                result = self._run_playwright_audit(url, payload)
+            except Exception as exc:
+                result = self._run_static_web_audit(url, payload, skipped_reason=f"playwright calisamadi: {exc}")
+        else:
+            result = self._run_static_web_audit(url, payload, skipped_reason="playwright kurulu degil; screenshot/console tarayici kontrolu atlandi.")
+        if auto_preview:
+            result["preview"] = auto_preview.get("preview")
+        return result
+
+    def _run_playwright_audit(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        from playwright.sync_api import sync_playwright  # type: ignore
+
+        viewports = payload.get("viewports") or [
+            {"name": "mobile", "width": 375, "height": 812},
+            {"name": "tablet", "width": 768, "height": 1024},
+            {"name": "desktop", "width": 1440, "height": 900},
+        ]
+        shot_dir = self.project_dir / ".orkestra" / "web_screenshots"
+        shot_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rows: list[dict[str, Any]] = []
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                for item in viewports:
+                    name = str(item.get("name") or f"{item.get('width')}px")
+                    width = int(item.get("width") or 1440)
+                    height = int(item.get("height") or 900)
+                    page = browser.new_page(viewport={"width": width, "height": height})
+                    console_errors: list[str] = []
+                    page_errors: list[str] = []
+                    page.on("console", lambda msg, errors=console_errors: errors.append(msg.text) if msg.type == "error" else None)
+                    page.on("pageerror", lambda exc, errors=page_errors: errors.append(str(exc)))
+                    try:
+                        page.goto(url, wait_until="networkidle", timeout=20_000)
+                        shot_path = shot_dir / f"{stamp}_{name}_{width}.png"
+                        page.screenshot(path=str(shot_path), full_page=True)
+                        metrics = page.evaluate(
+                            """() => {
+                              const body = document.body;
+                              const text = (body && body.innerText || "").trim();
+                              return {
+                                textLength: text.length,
+                                scrollWidth: document.documentElement.scrollWidth,
+                                innerWidth: window.innerWidth,
+                                bodyHeight: body ? body.getBoundingClientRect().height : 0
+                              };
+                            }"""
+                        )
+                        is_blank = int(metrics.get("textLength") or 0) < 3 and float(metrics.get("bodyHeight") or 0) < 24
+                        has_overflow = int(metrics.get("scrollWidth") or 0) > int(metrics.get("innerWidth") or 0) + 4
+                        rows.append(self._quality_row(f"{name} screenshot", "failed" if is_blank else "success", "Sayfa bos gorunuyor." if is_blank else str(shot_path.relative_to(self.project_dir)).replace("\\", "/")))
+                        rows.append(self._quality_row(f"{name} responsive", "warn" if has_overflow else "success", f"{width}px viewport yatay tasma {'var' if has_overflow else 'yok'}." ))
+                        if console_errors or page_errors:
+                            detail = "\n".join([*console_errors[:6], *page_errors[:6]])[:900]
+                            rows.append(self._quality_row(f"{name} console", "failed", detail))
+                        else:
+                            rows.append(self._quality_row(f"{name} console", "success", "Console error yakalanmadi."))
+                    except Exception as exc:
+                        rows.append(self._quality_row(f"{name} audit", "failed", str(exc)))
+                    finally:
+                        page.close()
+            finally:
+                browser.close()
+        return self._write_web_audit_report("", [self._section("browser", "Screenshot / Console / Responsive", rows)], target=".", url=url)
+
+    def _run_static_web_audit(self, url: str, payload: dict[str, Any], *, skipped_reason: str) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        try:
+            with urllib.request.urlopen(url, timeout=float(payload.get("timeout") or 6)) as response:
+                raw = response.read(700_000).decode("utf-8", errors="replace")
+            text = re.sub(r"<(script|style)\b.*?</\1>", "", raw, flags=re.IGNORECASE | re.DOTALL)
+            visible = html.unescape(re.sub(r"<[^>]+>", " ", text))
+            visible = re.sub(r"\s+", " ", visible).strip()
+            rows.append(self._quality_row("Preview reachable", "success", f"{url} erisilebilir."))
+            rows.append(self._quality_row("Blank page", "warn" if len(visible) < 3 else "success", "Gorunur metin az; manuel kontrol gerekli." if len(visible) < 3 else "Statik icerik bos degil."))
+        except Exception as exc:
+            rows.append(self._quality_row("Preview reachable", "failed", str(exc)))
+        rows.append(self._quality_row("Screenshot", "skipped", skipped_reason))
+        rows.append(self._quality_row("Console errors", "skipped", skipped_reason))
+        rows.append(self._quality_row("Responsive 375/768/1440", "skipped", skipped_reason))
+        return self._write_web_audit_report("", [self._section("browser", "Web/App QA", rows)], target=".", url=url)
+
+    def _write_web_audit_report(self, status: str, sections: list[dict[str, Any]], *, target: str, url: str) -> dict[str, Any]:
+        flat_rows = [row for section in sections for row in section.get("rows", [])]
+        failed = sum(1 for row in flat_rows if row.get("status") == "failed")
+        warnings = sum(1 for row in flat_rows if row.get("status") == "warn")
+        skipped = sum(1 for row in flat_rows if row.get("status") == "skipped")
+        final_status = status or ("failed" if failed else "warn" if warnings or skipped else "success")
+        result = {
+            "ok": True,
+            "ranAt": now_stamp(),
+            "target": target,
+            "url": url,
+            "status": final_status,
+            "failed": failed,
+            "warnings": warnings,
+            "skipped": skipped,
+            "sections": sections,
+        }
+        (self.project_dir / WEB_AUDIT_REPORT_FILE).write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+        self._log(f"Web/App QA tamamlandi: {final_status} ({warnings} uyari, {failed} hata)")
+        append_chat_entry(self.project_dir, "Orkestra", f"Web/App QA tamamlandi: {final_status}. Rapor: {WEB_AUDIT_REPORT_FILE}")
+        return result
+
     def quality_summary_payload(self) -> dict[str, Any]:
         path = self.project_dir / QUALITY_REPORT_FILE
         if not path.exists():
@@ -2795,6 +3281,8 @@ class MaestroRequestHandler(BaseHTTPRequestHandler):
             return self._send_json(self.app.workflow_templates_payload())
         if parsed.path == "/api/quality/report":
             return self._send_json({"ok": True, "quality": self.app.quality_summary_payload()})
+        if parsed.path == "/api/webapp/status":
+            return self._send_json({"ok": True, "webApp": self.app.webapp_summary_payload(), "detected": self.app.detect_webapp_payload({})})
         if parsed.path == "/api/file":
             query = parse_qs(parsed.query)
             name = query.get("name", [""])[0]
@@ -2881,6 +3369,16 @@ class MaestroRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True, "result": result, "status": self.app.status_payload()})
             if parsed.path == "/api/quality/test-generation":
                 return self._send_json(self.app.prepare_test_generation_workflow(payload))
+            if parsed.path == "/api/webapp/preview":
+                result = self.app.prepare_web_preview(payload)
+                return self._send_json({"ok": True, "result": result, "status": self.app.status_payload()})
+            if parsed.path == "/api/webapp/audit":
+                result = self.app.run_webapp_audit(payload)
+                return self._send_json({"ok": True, "result": result, "status": self.app.status_payload()})
+            if parsed.path == "/api/webapp/stop-preview":
+                return self._send_json(self.app.stop_web_preview())
+            if parsed.path == "/api/webapp/ui-polish":
+                return self._send_json(self.app.prepare_ui_polish_workflow(payload))
             if parsed.path == "/api/source/scan":
                 source_path = str(payload.get("path", ""))
                 meta = self.app.scan_source_path(source_path)
@@ -3023,6 +3521,7 @@ def create_server(
 def shutdown_server(server: MaestroServer) -> None:
     try:
         server.app.stop_run()
+        server.app.stop_web_preview()
         worker = getattr(server.app, "worker", None)  # hic akis baslamadiysa worker olmayabilir
         if worker and worker.is_alive() and worker is not threading.current_thread():
             worker.join(timeout=5)

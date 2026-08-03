@@ -371,6 +371,22 @@
         </section>
 
         <section id="tab-quality" class="tab-pane" role="tabpanel">
+          <div class="webapp-box">
+            <div class="webapp-head">
+              <div>
+                <strong>Web/App QA</strong>
+                <span>Build, preview, screenshot, console ve responsive kontrol</span>
+              </div>
+              <span id="webStatusText" class="toolbar-note">Preview bekliyor</span>
+            </div>
+            <div class="webapp-actions">
+              <button id="startPreviewBtn" class="btn secondary" type="button">Build + Preview</button>
+              <button id="runWebAuditBtn" class="btn quiet" type="button">Screenshot QA</button>
+              <button id="prepareUiPolishBtn" class="btn quiet" type="button">UI Polish Akisi</button>
+              <button id="stopPreviewBtn" class="btn ghost" type="button">Preview Durdur</button>
+            </div>
+            <div id="webAuditOutput" class="web-audit-output"></div>
+          </div>
           <div class="workspace-toolbar quality-toolbar">
             <label class="mini-check">
               <input id="qualityAutoFix" type="checkbox">
