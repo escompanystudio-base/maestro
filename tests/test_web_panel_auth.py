@@ -258,6 +258,66 @@ def test_ux_error_action_can_run_project_tests(project_dir):
         shutdown_server(server)
 
 
+def test_active_workflow_adds_quality_stages(project_dir):
+    app = MaestroWebPanel(project_dir)
+    workflow = app.active_workflow_data()
+    stages = workflow["stages"]
+    names = [stage["name"] for stage in stages]
+    assert "Test Uretimi" in names
+    assert "Kabul Kontrolu" in names
+    assert any(orkestra.REQUEST_FILE in stage.get("reads", []) for stage in stages)
+    assert any("kabul_kriterleri.md" in stage.get("writes", []) for stage in stages)
+    assert any("kabul_kontrol.md" in stage.get("writes", []) for stage in stages)
+
+
+def test_quality_audit_reports_static_risks(project_dir):
+    (project_dir / "app.py").write_text(
+        "import missingpkg\n\n"
+        "def unused_helper():\n"
+        "    return " + "ev" + "al('1')\n",
+        encoding="utf-8",
+    )
+    (project_dir / ".env").write_text("API_" + "KEY=sk-test-1234567890abcdef\n", encoding="utf-8")
+    app = MaestroWebPanel(project_dir)
+    result = app.run_quality_audit({"include": ["security", "dependency", "deadcode"]})
+
+    rows = [row for section in result["sections"] for row in section["rows"]]
+    names = [row["name"] for row in rows]
+    assert result["status"] == "warn"
+    assert ".env dosyasi" in names
+    assert "eval kullanimi" in names
+    assert "Eksik paket" in names
+    assert "Dead code adayi" in names
+    assert (project_dir / "kalite_raporu.json").exists()
+
+
+def test_quality_api_acceptance_and_test_generation(project_dir):
+    orkestra.save_user_request(project_dir, "Kullanici listesi olsun. Arama filtresi olsun.")
+    server = create_server("127.0.0.1", 0, project_dir)
+    _serve(server)
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        quality = _post_json(f"{base}/api/quality/run", {"include": ["security"]})
+        assert quality["ok"] is True
+        assert quality["result"]["sections"][0]["key"] == "security"
+        assert quality["status"]["projectQuality"]["exists"] is True
+
+        acceptance = _post_json(f"{base}/api/quality/acceptance", {})
+        assert acceptance["ok"] is True
+        assert acceptance["result"]["total"] >= 2
+        assert (project_dir / "kabul_kriterleri.md").exists()
+        assert (project_dir / "kabul_kontrol.md").exists()
+
+        flow = _post_json(f"{base}/api/quality/test-generation", {"autoStart": False})
+        assert flow["ok"] is True
+        generated = orkestra.load_generated_workflow(project_dir)
+        assert generated is not None
+        assert generated["project_type"] == "quality-test-generation"
+    finally:
+        server.shutdown()
+        shutdown_server(server)
+
+
 def test_shutdown_server_before_any_run(project_dir):
     # Hic akis baslatilmadan kapanis AttributeError vermemeli (worker yokken).
     server = create_server("127.0.0.1", 0, project_dir)

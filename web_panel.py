@@ -10,8 +10,10 @@ through a local browser panel.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import html
+import importlib.util
 import json
 import mimetypes
 import os
@@ -22,8 +24,9 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import webbrowser
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -118,6 +121,9 @@ OUTPUT_FILES = [
     "rapor.md",
     "kontrol.md",
     "test_raporu.json",
+    "kalite_raporu.json",
+    "kabul_kriterleri.md",
+    "kabul_kontrol.md",
     GENERATED_WORKFLOW_FILE,
 ]
 CODE_EXTS = {
@@ -154,6 +160,9 @@ SOURCE_CONTEXT_FILE = "kaynak_context.md"
 SOURCE_META_FILE = "source_context.json"
 SOURCE_IMPORT_DIR = "source_import"
 TEST_REPORT_FILE = "test_raporu.json"
+QUALITY_REPORT_FILE = "kalite_raporu.json"
+ACCEPTANCE_FILE = "kabul_kriterleri.md"
+ACCEPTANCE_REPORT_FILE = "kabul_kontrol.md"
 MAX_SOURCE_FILES = 80
 MAX_SOURCE_TREE_FILES = 260
 MAX_SOURCE_FILE_BYTES = 14_000
@@ -475,6 +484,8 @@ class MaestroWebPanel:
         self.run_id: str | None = None
         self.started_at: str | None = None
         self.finished_at: str | None = None
+        self.server_host: str | None = None
+        self.auth_enabled = False
         self.last_error = ""
         self.log_path: Path | None = None
         self.log_lines: deque[str] = deque(maxlen=1200)
@@ -497,20 +508,89 @@ class MaestroWebPanel:
                 session_hash = workflow_hash(session["stages"])
                 state = load_state(self.project_dir)
                 if running or state.get("workflow_hash") == session_hash:
-                    return session
+                    return self._quality_enhanced_workflow_data(session)
             except Exception:
                 pass
         data = load_generated_workflow(self.project_dir)
         if data:
-            return data
-        return {
+            return self._quality_enhanced_workflow_data(data)
+        return self._quality_enhanced_workflow_data({
             "summary": "Varsayilan Maestro ajan akisi",
             "project_type": "default",
             "stages": WF.STAGES,
-        }
+        })
 
     def active_stages(self) -> list[dict[str, Any]]:
         return self.active_workflow_data()["stages"]
+
+    def _quality_enhanced_workflow_data(self, data: dict[str, Any]) -> dict[str, Any]:
+        project_type = str(data.get("project_type", ""))
+        if project_type == "runtime" or project_type.startswith(("error-", "quality-")):
+            return data
+        enhanced = json.loads(json.dumps(data, ensure_ascii=False))
+        stages = list(enhanced.get("stages", []))
+        if not stages:
+            return enhanced
+
+        has_acceptance = any(ACCEPTANCE_FILE in stage.get("writes", []) for stage in stages)
+        if not has_acceptance:
+            first = stages[0]
+            writes = list(first.get("writes", []))
+            if ACCEPTANCE_FILE not in writes:
+                writes.append(ACCEPTANCE_FILE)
+            first["writes"] = writes
+            first["prompt"] = (
+                first.get("prompt", "")
+                + f"\n\nKullanici istegini madde madde kabul kriterlerine cevir ve {ACCEPTANCE_FILE} dosyasina yaz."
+            )
+
+        has_test_generation = any("test uret" in stage.get("name", "").lower() or "test üret" in stage.get("name", "").lower() for stage in stages)
+        if not has_test_generation and len(stages) < 8:
+            insert_at = 1
+            for idx, stage in enumerate(stages):
+                haystack = f"{stage.get('name', '')} {stage.get('prompt', '')}".lower()
+                if any(key in haystack for key in ("kod", "code", "implement", "bugfix", "duzelt", "düzelt")):
+                    insert_at = idx + 1
+                    break
+            stages.insert(
+                insert_at,
+                {
+                    "name": "Test Uretimi",
+                    "agent": "codex",
+                    "prompt": (
+                        f"{REQUEST_FILE}, plan.md, rapor.md ve {ACCEPTANCE_FILE} dosyalarini oku. "
+                        "Kodlama bittigi icin ayri test ajani gibi davran: uygun unit/smoke/regression testlerini "
+                        f"projeye ekle veya net test taslagini olustur. Sonucu {TEST_REPORT_FILE} dosyasina yaz."
+                    ),
+                    "reads": [REQUEST_FILE, "plan.md", "rapor.md", ACCEPTANCE_FILE],
+                    "writes": [TEST_REPORT_FILE],
+                    "checkpoint": True,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                },
+            )
+
+        has_acceptance_check = any(ACCEPTANCE_REPORT_FILE in stage.get("writes", []) for stage in stages)
+        if not has_acceptance_check and len(stages) < 8:
+            stages.append(
+                {
+                    "name": "Kabul Kontrolu",
+                    "agent": "codex",
+                    "prompt": (
+                        f"{ACCEPTANCE_FILE}, rapor.md, kontrol.md ve {TEST_REPORT_FILE} dosyalarini oku. "
+                        "Kabul kriterlerini tek tek dogrula: gecti/kontrol gerekli/eksik/test gecmedi durumlarini "
+                        f"{ACCEPTANCE_REPORT_FILE} dosyasina yaz."
+                    ),
+                    "reads": [ACCEPTANCE_FILE, "rapor.md", "kontrol.md", TEST_REPORT_FILE],
+                    "writes": [ACCEPTANCE_REPORT_FILE],
+                    "checkpoint": False,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                }
+            )
+
+        enhanced["stages"] = stages
+        return enhanced
 
     def save_request(self, text: str) -> None:
         save_user_request(self.project_dir, text)
@@ -1603,6 +1683,7 @@ class MaestroWebPanel:
                 "diagnostics": self.diagnostics_payload(),
                 "workflowTemplates": self.workflow_templates_payload(),
                 "resultQuality": self._result_quality_payload(stages, payload["status"], payload["lastError"]),
+                "projectQuality": self.quality_summary_payload(),
             }
         )
         return payload
@@ -2016,6 +2097,495 @@ class MaestroWebPanel:
             return {"ok": True, "message": f"{label} akisi baslatildi.", "status": self.status_payload()}
         return {"ok": True, "message": f"{label} workflow hazir.", "status": self.status_payload()}
 
+    def run_quality_audit(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        target_path = self.project_dir
+        target = str(payload.get("target", "")).strip()
+        if target:
+            candidate = self.safe_file_path(target)
+            if candidate.exists() and candidate.is_dir():
+                target_path = candidate
+        include = set(payload.get("include") or ["lint", "security", "dependency", "deadcode", "acceptance"])
+        auto_fix = bool(payload.get("autoFix", False))
+        sections: list[dict[str, Any]] = []
+        if "lint" in include:
+            sections.append(self._lint_format_section(target_path, auto_fix=auto_fix))
+        if "security" in include:
+            sections.append(self._security_scan_section(target_path))
+        if "dependency" in include:
+            sections.append(self._dependency_analysis_section())
+        if "deadcode" in include:
+            sections.append(self._dead_code_section(target_path))
+        if "acceptance" in include:
+            sections.append(self._acceptance_section())
+
+        flat_rows = [row for section in sections for row in section.get("rows", [])]
+        failed = sum(1 for row in flat_rows if row.get("status") == "failed")
+        warnings = sum(1 for row in flat_rows if row.get("status") == "warn")
+        skipped = sum(1 for row in flat_rows if row.get("status") == "skipped")
+        status = "failed" if failed else "warn" if warnings else "success"
+        result = {
+            "ok": True,
+            "ranAt": now_stamp(),
+            "target": str(target_path.relative_to(self.project_dir)) if target_path != self.project_dir else ".",
+            "status": status,
+            "failed": failed,
+            "warnings": warnings,
+            "skipped": skipped,
+            "autoFix": auto_fix,
+            "sections": sections,
+        }
+        (self.project_dir / QUALITY_REPORT_FILE).write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+        self._log(f"Kalite taramasi calisti: {status} ({warnings} uyari, {failed} hata)")
+        append_chat_entry(self.project_dir, "Orkestra", f"Kalite taramasi tamamlandi: {status}. Rapor: {QUALITY_REPORT_FILE}")
+        return result
+
+    def _quality_row(
+        self,
+        name: str,
+        status: str,
+        detail: str,
+        *,
+        command: str = "",
+        file: str = "",
+        line: int | None = None,
+    ) -> dict[str, Any]:
+        row: dict[str, Any] = {"name": name, "status": status, "detail": detail}
+        if command:
+            row["command"] = command
+        if file:
+            row["file"] = file
+        if line:
+            row["line"] = line
+        return row
+
+    def _section(self, key: str, title: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        status = "success"
+        if any(row.get("status") == "failed" for row in rows):
+            status = "failed"
+        elif any(row.get("status") == "warn" for row in rows):
+            status = "warn"
+        elif rows and all(row.get("status") == "skipped" for row in rows):
+            status = "skipped"
+        return {"key": key, "title": title, "status": status, "rows": rows}
+
+    def _python_tool_base(self, tool: str, module: str) -> list[str] | None:
+        if importlib.util.find_spec(module):
+            return [sys.executable, "-m", module]
+        found = find_tool(tool)
+        if found:
+            return [found]
+        return None
+
+    def _run_quality_command(self, name: str, cmd: list[str], *, timeout: int = 120) -> dict[str, Any]:
+        result = self._run_check(name, cmd, cwd=self.project_dir, timeout=timeout)
+        return self._quality_row(
+            name,
+            result["status"],
+            result.get("output", "").strip() or ("Tamam" if result["status"] == "success" else "-"),
+            command=result.get("command", " ".join(cmd)),
+        )
+
+    def _lint_format_section(self, target_path: Path, *, auto_fix: bool) -> dict[str, Any]:
+        rel_target = "." if target_path == self.project_dir else str(target_path.relative_to(self.project_dir))
+        rows: list[dict[str, Any]] = []
+        ruff = self._python_tool_base("ruff", "ruff")
+        if ruff:
+            cmd = [*ruff, "check", rel_target]
+            if auto_fix:
+                cmd.append("--fix")
+            rows.append(self._run_quality_command("ruff check", cmd))
+            format_cmd = [*ruff, "format", rel_target] if auto_fix else [*ruff, "format", "--check", rel_target]
+            rows.append(self._run_quality_command("ruff format", format_cmd))
+        else:
+            rows.append(self._quality_row("ruff", "skipped", "ruff kurulu degil; Python lint/format atlandi."))
+
+        black = self._python_tool_base("black", "black")
+        if black:
+            cmd = [*black, rel_target] if auto_fix else [*black, "--check", rel_target]
+            rows.append(self._run_quality_command("black", cmd))
+        else:
+            rows.append(self._quality_row("black", "skipped", "black kurulu degil; alternatif format kontrolu atlandi."))
+
+        package_json = self.project_dir / "package.json"
+        npx = find_tool("npx")
+        if package_json.exists() and npx:
+            rows.append(self._run_quality_command("eslint", [npx, "--no-install", "eslint", rel_target]))
+            prettier_cmd = [npx, "--no-install", "prettier", "--write" if auto_fix else "--check", rel_target]
+            rows.append(self._run_quality_command("prettier", prettier_cmd))
+        elif package_json.exists():
+            rows.append(self._quality_row("eslint/prettier", "skipped", "package.json var ama npx bulunamadi."))
+        else:
+            rows.append(self._quality_row("eslint/prettier", "skipped", "package.json yok; JS lint/format atlandi."))
+        return self._section("lint", "Lint / Format", rows)
+
+    def _iter_quality_files(self, root: Path, *, limit: int = 500) -> list[Path]:
+        rows: list[Path] = []
+        for path in root.rglob("*"):
+            if len(rows) >= limit:
+                break
+            if not path.is_file():
+                continue
+            try:
+                rel_parts = path.relative_to(self.project_dir).parts
+            except ValueError:
+                continue
+            if any(part in SKIP_DIRS for part in rel_parts[:-1]):
+                continue
+            name = path.name
+            if name.startswith(".env") or name in TEXT_FILENAMES or path.suffix.lower() in CODE_EXTS:
+                rows.append(path)
+        return sorted(rows)
+
+    def _read_small_text(self, path: Path, limit: int = 600_000) -> str:
+        try:
+            if path.stat().st_size > limit:
+                return ""
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def _security_scan_section(self, root: Path) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        local_hosts = {"127.0.0.1", "localhost", "::1", None}
+        if self.server_host not in local_hosts:
+            status = "warn" if self.auth_enabled else "failed"
+            detail = "Panel public host uzerinde token ile korunuyor." if self.auth_enabled else "Panel public host uzerinde tokensiz calisiyor."
+            rows.append(self._quality_row("Public host", status, detail))
+
+        secret_re = re.compile(
+            r"(?i)\b(api[_-]?key|secret|token|password|private[_-]?key|access[_-]?key)\b\s*[:=]\s*['\"]?([A-Za-z0-9_./+=-]{12,})"
+        )
+        dangerous = [
+            (re.compile(r"\beval\s*\("), "eval kullanimi"),
+            (re.compile(r"\bexec\s*\("), "exec kullanimi"),
+            (re.compile(r"shell\s*=\s*True"), "subprocess shell=True"),
+            (re.compile(r"\bpickle\.loads?\s*\("), "pickle load kullanimi"),
+            (re.compile(r"\byaml\.load\s*\("), "yaml.load kullanimi"),
+        ]
+        for path in self._iter_quality_files(root):
+            rel = str(path.relative_to(self.project_dir)).replace("\\", "/")
+            if rel in {QUALITY_REPORT_FILE, TEST_REPORT_FILE, ACCEPTANCE_REPORT_FILE}:
+                continue
+            if path.name.startswith(".env") and path.name not in {".env.example", ".env.sample"}:
+                rows.append(self._quality_row(".env dosyasi", "warn", "Gercek gizli deger icerebilir; repo/paket disinda tutulmali.", file=rel))
+            text = self._read_small_text(path)
+            if not text:
+                continue
+            is_test_file = rel.startswith("tests/")
+            for line_no, line in enumerate(text.splitlines(), 1):
+                if secret_re.search(line) and not is_test_file and "example" not in rel.lower() and "dummy" not in line.lower():
+                    rows.append(self._quality_row("Secret pattern", "warn", "Olası gizli deger bulundu; deger maskelendi.", file=rel, line=line_no))
+                    if len(rows) > 80:
+                        break
+                for regex, label in dangerous:
+                    if "re.compile" in line:
+                        continue
+                    if regex.search(line):
+                        rows.append(self._quality_row(label, "warn", "Manuel guvenlik kontrolu gerekli.", file=rel, line=line_no))
+                if len(rows) > 100:
+                    break
+        if not rows:
+            rows.append(self._quality_row("Security scan", "success", "Belirgin secret/eval/public-host riski bulunmadi."))
+        return self._section("security", "Guvenlik Taramasi", rows)
+
+    def _normalized_package_name(self, value: str) -> str:
+        name = re.split(r"[<>=!~;\[\]\s]", value.strip(), maxsplit=1)[0]
+        return name.lower().replace("_", "-")
+
+    def _dependency_analysis_section(self) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        declared: dict[str, str] = {}
+        dep_specs: list[tuple[str, str]] = []
+        pyproject = self.project_dir / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                raw = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                project = raw.get("project", {})
+                for dep in project.get("dependencies", []) or []:
+                    dep_specs.append((str(dep), "pyproject.toml"))
+                optional = project.get("optional-dependencies", {}) or {}
+                for group, deps in optional.items():
+                    for dep in deps or []:
+                        dep_specs.append((str(dep), f"pyproject.toml[{group}]"))
+            except Exception as exc:
+                rows.append(self._quality_row("pyproject.toml", "failed", f"Manifest okunamadi: {exc}"))
+        for req_path in sorted(self.project_dir.glob("requirements*.txt")):
+            for line in req_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                clean = line.strip()
+                if not clean or clean.startswith(("#", "-")):
+                    continue
+                dep_specs.append((clean, req_path.name))
+
+        for spec, source in dep_specs:
+            name = self._normalized_package_name(spec)
+            if not name:
+                continue
+            declared[name] = source
+            if "==" not in spec and "===" not in spec:
+                rows.append(self._quality_row("Version pinning", "warn", f"{spec} tam sabitlenmemis.", file=source))
+        if not declared:
+            rows.append(self._quality_row("Dependency manifest", "warn", "pyproject/requirements icinde dependency bulunamadi."))
+
+        imports = self._collect_python_imports()
+        local = self._local_python_modules()
+        stdlib = set(getattr(sys, "stdlib_module_names", set()))
+        external = {
+            item for item in imports
+            if item not in local and item not in stdlib and not item.startswith("_")
+        }
+        declared_imports = {name.replace("-", "_") for name in declared}
+        missing = sorted(item for item in external if item.replace("_", "-") not in declared and item not in declared_imports)
+        for name in missing[:20]:
+            rows.append(self._quality_row("Eksik paket", "warn", f"'{name}' import ediliyor ama manifestte gorunmuyor."))
+        unused = sorted(name for name in declared if name.replace("-", "_") not in imports and name not in {"setuptools"})
+        for name in unused[:12]:
+            rows.append(self._quality_row("Gereksiz paket adayi", "warn", f"'{name}' manifestte var ama importlarda gorunmedi.", file=declared[name]))
+
+        pip_audit = find_tool("pip-audit")
+        if pip_audit:
+            rows.append(self._run_quality_command("pip-audit", [pip_audit, "--progress-spinner", "off"], timeout=90))
+        else:
+            rows.append(self._quality_row("pip-audit", "skipped", "pip-audit kurulu degil; Python advisory kontrolu atlandi."))
+        if (self.project_dir / "package.json").exists() and find_tool("npm"):
+            rows.append(self._run_quality_command("npm audit", [find_tool("npm") or "npm", "audit", "--omit=dev"], timeout=90))
+        elif (self.project_dir / "package.json").exists():
+            rows.append(self._quality_row("npm audit", "skipped", "npm bulunamadi."))
+        return self._section("dependency", "Dependency Analizi", rows)
+
+    def _local_python_modules(self) -> set[str]:
+        names = {path.stem for path in self.project_dir.glob("*.py")}
+        for path in self.project_dir.iterdir():
+            if path.is_dir() and (path / "__init__.py").exists():
+                names.add(path.name)
+        names.update({"tests"})
+        return names
+
+    def _collect_python_imports(self) -> set[str]:
+        imports: set[str] = set()
+        for path in self._python_files_for_test(self.project_dir):
+            text = self._read_small_text(path)
+            if not text:
+                continue
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imports.add(alias.name.split(".", 1)[0])
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imports.add(node.module.split(".", 1)[0])
+        imports.discard("__future__")
+        return imports
+
+    def _dead_code_section(self, root: Path) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        function_defs: dict[str, tuple[str, int]] = {}
+        used_names: set[str] = set()
+        duplicate_counter: Counter[str] = Counter()
+        duplicate_locations: dict[str, list[str]] = {}
+        for path in self._iter_quality_files(root):
+            rel = str(path.relative_to(self.project_dir)).replace("\\", "/")
+            text = self._read_small_text(path)
+            if not text:
+                continue
+            line_count = len(text.splitlines())
+            if path.suffix.lower() in {".py", ".js", ".ts", ".tsx", ".jsx"} and line_count > 800:
+                rows.append(self._quality_row("Buyuk dosya", "warn", f"{line_count} satir; bolme/refactor adayi.", file=rel))
+            if path.suffix.lower() == ".py":
+                try:
+                    tree = ast.parse(text)
+                except SyntaxError:
+                    continue
+                for node in tree.body:
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        function_defs.setdefault(node.name, (rel, node.lineno))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Name):
+                        used_names.add(node.id)
+                    elif isinstance(node, ast.Attribute):
+                        used_names.add(node.attr)
+            normalized = [
+                line.strip()
+                for line in text.splitlines()
+                if line.strip() and not line.strip().startswith(("#", "//", "/*", "*"))
+            ]
+            for idx in range(0, max(0, len(normalized) - 5)):
+                chunk = "\n".join(normalized[idx: idx + 6])
+                if len(chunk) < 120:
+                    continue
+                key = hashlib.sha1(chunk.encode("utf-8", errors="replace")).hexdigest()
+                duplicate_counter[key] += 1
+                duplicate_locations.setdefault(key, []).append(f"{rel}:{idx + 1}")
+
+        keepers = {"main", "create_server", "shutdown_server"}
+        for name, (rel, line) in sorted(function_defs.items()):
+            if name.startswith("_") or name in keepers:
+                continue
+            if name not in used_names:
+                rows.append(self._quality_row("Dead code adayi", "warn", f"'{name}' referansi bulunamadi.", file=rel, line=line))
+                if len(rows) > 60:
+                    break
+        for key, count in duplicate_counter.most_common(8):
+            locations = duplicate_locations.get(key, [])
+            if count > 1 and len(set(locations)) > 1:
+                rows.append(self._quality_row("Tekrar eden blok", "warn", "Benzer 6 satirlik bloklar: " + ", ".join(locations[:4])))
+        if not rows:
+            rows.append(self._quality_row("Dead code / buyuk dosya", "success", "Esik ustu buyuk dosya veya belirgin dead-code adayi bulunmadi."))
+        return self._section("deadcode", "Dead Code / Buyuk Dosya", rows)
+
+    def _extract_acceptance_criteria(self, request: str) -> list[str]:
+        raw_parts = re.split(r"[\n.;]+", request or "")
+        criteria: list[str] = []
+        for part in raw_parts:
+            clean = re.sub(r"^[\s\-*0-9.)]+", "", part).strip()
+            if len(clean) < 6:
+                continue
+            if clean not in criteria:
+                criteria.append(clean)
+            if len(criteria) >= 8:
+                break
+        return criteria or ["Kullanici istegi calisan cikti ve raporla karsilanmali."]
+
+    def _load_acceptance_criteria(self) -> list[str]:
+        path = self.project_dir / ACCEPTANCE_FILE
+        if path.exists():
+            rows = []
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                clean = re.sub(r"^[\s\-*0-9.)\[\]xX]+", "", line).strip()
+                if clean and not clean.lower().startswith("#"):
+                    rows.append(clean)
+            if rows:
+                return rows[:12]
+        criteria = self._extract_acceptance_criteria(read_user_request(self.project_dir))
+        self._write_acceptance_file(criteria)
+        return criteria
+
+    def _write_acceptance_file(self, criteria: list[str]) -> None:
+        lines = ["# Kabul Kriterleri", ""]
+        lines += [f"- [ ] {item}" for item in criteria]
+        (self.project_dir / ACCEPTANCE_FILE).write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+    def run_acceptance_check(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        criteria_payload = payload.get("criteria")
+        if isinstance(criteria_payload, list) and criteria_payload:
+            criteria = [str(item).strip() for item in criteria_payload if str(item).strip()]
+            self._write_acceptance_file(criteria)
+        else:
+            criteria = self._load_acceptance_criteria()
+        evidence_parts = []
+        for name in ("plan.md", "tasarim.md", "rapor.md", "kontrol.md", TEST_REPORT_FILE, CHAT_FILE):
+            path = self.project_dir / name
+            if path.exists():
+                evidence_parts.append(path.read_text(encoding="utf-8", errors="replace"))
+        evidence = "\n".join(evidence_parts).lower()
+        rows = []
+        for item in criteria:
+            tokens = [token for token in re.findall(r"[a-zA-Z0-9_ğüşöçıİĞÜŞÖÇ]{4,}", item.lower()) if token not in {"kullanici", "istegi", "olsun", "yapilsin"}]
+            hits = sum(1 for token in set(tokens) if token in evidence)
+            status = "passed" if hits >= min(2, max(1, len(set(tokens)))) else "needs-review"
+            rows.append({"criterion": item, "status": status, "matchedKeywords": hits})
+        passed = sum(1 for row in rows if row["status"] == "passed")
+        report_lines = ["# Kabul Kontrolu", "", f"Durum: {passed}/{len(rows)} kriter kanit buldu.", ""]
+        for row in rows:
+            mark = "x" if row["status"] == "passed" else " "
+            report_lines.append(f"- [{mark}] {row['criterion']} ({row['status']})")
+        (self.project_dir / ACCEPTANCE_REPORT_FILE).write_text("\n".join(report_lines).strip() + "\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "ranAt": now_stamp(),
+            "status": "success" if passed == len(rows) else "warn",
+            "passed": passed,
+            "total": len(rows),
+            "criteria": rows,
+            "report": ACCEPTANCE_REPORT_FILE,
+        }
+
+    def _acceptance_section(self) -> dict[str, Any]:
+        result = self.run_acceptance_check({})
+        rows = [
+            self._quality_row(
+                "Acceptance criteria",
+                "success" if item["status"] == "passed" else "warn",
+                item["criterion"],
+            )
+            for item in result["criteria"]
+        ]
+        return self._section("acceptance", "Acceptance Criteria", rows)
+
+    def prepare_test_generation_workflow(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        if self.running:
+            raise RuntimeError("Akis calisirken test uretme workflow'u hazirlanamaz.")
+        data = {
+            "summary": "Otomatik test uretme akisi",
+            "project_type": "quality-test-generation",
+            "brief_hash": hashlib.sha256(read_user_request(self.project_dir).encode("utf-8", errors="replace")).hexdigest()[:16],
+            "stages": [
+                {
+                    "name": "Test Kapsami",
+                    "agent": "codex",
+                    "prompt": f"{REQUEST_FILE}, plan.md, rapor.md ve {ACCEPTANCE_FILE} dosyalarini oku. Test kapsamini ve riskleri plan.md dosyasina ekle.",
+                    "reads": [REQUEST_FILE],
+                    "writes": ["plan.md"],
+                    "checkpoint": False,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                },
+                {
+                    "name": "Test Kodlama",
+                    "agent": "codex",
+                    "prompt": "Projeye uygun test dosyalarini veya smoke test scriptlerini ekle. Hangi testleri yazdigini test_raporu.json dosyasina yaz.",
+                    "reads": ["plan.md", "rapor.md"],
+                    "writes": [TEST_REPORT_FILE],
+                    "checkpoint": False,
+                    "timeout": 1800,
+                    "fallback_agent": "claude",
+                },
+                {
+                    "name": "Test Dogrulama",
+                    "agent": "codex",
+                    "prompt": f"Yazilan testleri ve kabul kriterlerini kontrol et. Sonucu {ACCEPTANCE_REPORT_FILE} dosyasina yaz.",
+                    "reads": [TEST_REPORT_FILE, ACCEPTANCE_FILE],
+                    "writes": [ACCEPTANCE_REPORT_FILE],
+                    "checkpoint": False,
+                    "timeout": 1200,
+                    "fallback_agent": "claude",
+                },
+            ],
+        }
+        self._apply_generated_workflow(
+            data,
+            detail="Test uretme workflow hazir",
+            chat_message="Kodlama sonrasi ayri test ajani icin workflow olusturuldu.",
+        )
+        if bool(payload.get("autoStart", False)):
+            self.start_run(start_idx=1, reset_state=True, use_checkpoints=False)
+            message = "Test uretme akisi baslatildi."
+        else:
+            message = "Test uretme workflow hazir."
+        return {"ok": True, "message": message, "status": self.status_payload()}
+
+    def quality_summary_payload(self) -> dict[str, Any]:
+        path = self.project_dir / QUALITY_REPORT_FILE
+        if not path.exists():
+            return {"exists": False, "status": "missing", "summary": "Kalite taramasi yok."}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"exists": True, "status": "failed", "summary": "Kalite raporu okunamadi."}
+        return {
+            "exists": True,
+            "status": raw.get("status", "unknown"),
+            "ranAt": raw.get("ranAt", ""),
+            "failed": raw.get("failed", 0),
+            "warnings": raw.get("warnings", 0),
+            "skipped": raw.get("skipped", 0),
+        }
+
     def run_project_tests(self, target: str = "") -> dict[str, Any]:
         target_path = self.project_dir
         if target:
@@ -2223,6 +2793,8 @@ class MaestroRequestHandler(BaseHTTPRequestHandler):
             return self._send_json(self.app.source_tree_payload())
         if parsed.path == "/api/workflow/templates":
             return self._send_json(self.app.workflow_templates_payload())
+        if parsed.path == "/api/quality/report":
+            return self._send_json({"ok": True, "quality": self.app.quality_summary_payload()})
         if parsed.path == "/api/file":
             query = parse_qs(parsed.query)
             name = query.get("name", [""])[0]
@@ -2301,6 +2873,14 @@ class MaestroRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json(self.app.wizard_workflow_payload(payload))
             if parsed.path == "/api/ux/error-action":
                 return self._send_json(self.app.error_action_payload(payload))
+            if parsed.path == "/api/quality/run":
+                result = self.app.run_quality_audit(payload)
+                return self._send_json({"ok": True, "result": result, "status": self.app.status_payload()})
+            if parsed.path == "/api/quality/acceptance":
+                result = self.app.run_acceptance_check(payload)
+                return self._send_json({"ok": True, "result": result, "status": self.app.status_payload()})
+            if parsed.path == "/api/quality/test-generation":
+                return self._send_json(self.app.prepare_test_generation_workflow(payload))
             if parsed.path == "/api/source/scan":
                 source_path = str(payload.get("path", ""))
                 meta = self.app.scan_source_path(source_path)
@@ -2434,6 +3014,8 @@ def create_server(
     server = MaestroServer((host, port), MaestroRequestHandler)
     server.app = app
     server.auth_token = auth_token
+    app.server_host = host
+    app.auth_enabled = bool(auth_token)
     app.server_port = server.server_port
     return server
 

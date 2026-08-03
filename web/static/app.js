@@ -9,7 +9,9 @@ const state = {
   lastPreviewFile: "",
   sourceBusy: false,
   testBusy: false,
+  qualityBusy: false,
   lastTestResult: null,
+  lastQualityResult: null,
   smartBusy: false,
   uiMode: loadLocalSetting("maestroUiMode", "expert"),
   notificationsEnabled: loadLocalSetting("maestroNotifications", "off") === "on",
@@ -64,6 +66,9 @@ function setBusy(running, waitingCheckpoint) {
   $("stopBtn").disabled = !running && !waitingCheckpoint;
   $("applyTemplateBtn").disabled = running;
   $("runTestsBtn").disabled = running || state.testBusy;
+  if ($("runQualityBtn")) $("runQualityBtn").disabled = running || state.qualityBusy;
+  if ($("runAcceptanceBtn")) $("runAcceptanceBtn").disabled = running || state.qualityBusy;
+  if ($("prepareTestsBtn")) $("prepareTestsBtn").disabled = running || state.qualityBusy;
   if ($("suggestAgentBtn")) $("suggestAgentBtn").disabled = state.smartBusy;
   if ($("buildContextBtn")) $("buildContextBtn").disabled = running || state.smartBusy;
   if ($("saveMemoryBtn")) $("saveMemoryBtn").disabled = state.smartBusy;
@@ -438,6 +443,81 @@ function renderTestResult(result) {
   `;
 }
 
+function renderQualitySummary(summary) {
+  if (!$("qualityStatusText")) return;
+  if (state.qualityBusy) {
+    $("qualityStatusText").textContent = "Kalite taramasi calisiyor";
+    return;
+  }
+  if (!summary || !summary.exists) {
+    $("qualityStatusText").textContent = "Kalite taramasi bekliyor";
+    if (!state.lastQualityResult) {
+      $("qualityOutput").innerHTML = emptyState("Kalite taramasi bekliyor", "Kalite Taramasi ile lint, guvenlik, dependency ve acceptance kontrolu calisir.");
+    }
+    return;
+  }
+  $("qualityStatusText").textContent = `${summary.status || "unknown"} - ${summary.warnings || 0} uyari, ${summary.failed || 0} hata`;
+}
+
+function renderQualityResult(result) {
+  if (!result) {
+    renderQualitySummary(state.data && state.data.projectQuality);
+    return;
+  }
+  const sections = result.sections || [];
+  $("qualityStatusText").textContent = `${result.status || "-"} - ${result.warnings || 0} uyari, ${result.failed || 0} hata`;
+  $("qualityOutput").innerHTML = `
+    <div class="quality-run-summary ${escapeAttr(result.status || "info")}">
+      <strong>${escapeHtml(result.status || "-")}</strong>
+      <span>Hedef: ${escapeHtml(result.target || ".")} - ${escapeHtml(result.ranAt || "")}</span>
+    </div>
+    ${sections.map((section) => `
+      <section class="quality-section ${escapeAttr(section.status || "info")}">
+        <div class="quality-section-head">
+          <strong>${escapeHtml(section.title || section.key || "Kalite")}</strong>
+          <span>${escapeHtml(section.status || "-")}</span>
+        </div>
+        <div class="quality-items">
+          ${(section.rows || []).map((row) => `
+            <article class="quality-item ${escapeAttr(row.status || "info")}">
+              <div>
+                <strong>${escapeHtml(row.name || "-")}</strong>
+                <p>${escapeHtml(row.detail || "")}</p>
+                ${row.command ? `<small>${escapeHtml(row.command)}</small>` : ""}
+                ${row.file ? `<small>${escapeHtml(row.file)}${row.line ? `:${escapeHtml(row.line)}` : ""}</small>` : ""}
+              </div>
+              <span>${escapeHtml(row.status || "-")}</span>
+            </article>
+          `).join("") || emptyState("Kayit yok", "Bu bolumde bulgu yok.")}
+        </div>
+      </section>
+    `).join("")}
+  `;
+}
+
+function renderAcceptanceResult(result) {
+  if (!result) return;
+  state.lastQualityResult = {
+    status: result.status,
+    target: ".",
+    ranAt: result.ranAt,
+    warnings: result.total - result.passed,
+    failed: 0,
+    sections: [
+      {
+        title: "Acceptance Criteria",
+        status: result.status,
+        rows: (result.criteria || []).map((item) => ({
+          name: item.status,
+          status: item.status === "passed" ? "success" : "warn",
+          detail: item.criterion
+        }))
+      }
+    ]
+  };
+  renderQualityResult(state.lastQualityResult);
+}
+
 function renderChat(data) {
   $("chatOutput").textContent = data.chat || "Sohbet henuz yok.";
 }
@@ -563,6 +643,7 @@ function renderStatus(data) {
   renderSourceTree(data.sourceTree || {});
   renderWorkflowTemplates(data.workflowTemplates || {});
   renderTestResult(state.lastTestResult);
+  renderQualitySummary(data.projectQuality || {});
   renderChat(data);
   renderMetrics(data);
   renderSnapshots(data);
@@ -1117,6 +1198,52 @@ async function runProjectTests() {
   }
 }
 
+async function runQualityAudit() {
+  state.qualityBusy = true;
+  $("qualityStatusText").textContent = "Kalite taramasi calisiyor";
+  try {
+    const data = await api("/api/quality/run", {
+      method: "POST",
+      body: JSON.stringify({ autoFix: $("qualityAutoFix").checked })
+    });
+    state.lastQualityResult = data.result;
+    renderQualityResult(data.result);
+    toast(data.result.status === "success" ? "Kalite taramasi temiz." : "Kalite bulgulari var.");
+    state.qualityBusy = false;
+    renderStatus(data.status || await api("/api/status"));
+    activateTab("quality");
+  } finally {
+    state.qualityBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function runAcceptanceCheck() {
+  state.qualityBusy = true;
+  $("qualityStatusText").textContent = "Kabul kontrolu calisiyor";
+  try {
+    const data = await api("/api/quality/acceptance", { method: "POST", body: "{}" });
+    renderAcceptanceResult(data.result);
+    toast(data.result.status === "success" ? "Kabul kriterleri temiz." : "Kabul kontrolu inceleme istiyor.");
+    state.qualityBusy = false;
+    renderStatus(data.status || await api("/api/status"));
+    activateTab("quality");
+  } finally {
+    state.qualityBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function prepareTestGenerationWorkflow() {
+  const data = await api("/api/quality/test-generation", {
+    method: "POST",
+    body: JSON.stringify({ autoStart: false })
+  });
+  toast(data.message || "Test uretme workflow hazir.");
+  renderStatus(data.status || await api("/api/status"));
+  activateTab("quality");
+}
+
 async function runErrorAction(action) {
   if (action === "run_tests") {
     await runProjectTests();
@@ -1317,6 +1444,9 @@ function bindEvents() {
   $("stopBtn").addEventListener("click", () => stopRun().catch((error) => toast(error.message)));
   $("repairStateBtn").addEventListener("click", () => repairState());
   $("runTestsBtn").addEventListener("click", () => runProjectTests().catch((error) => toast(error.message)));
+  if ($("runQualityBtn")) $("runQualityBtn").addEventListener("click", () => runQualityAudit().catch((error) => toast(error.message)));
+  if ($("runAcceptanceBtn")) $("runAcceptanceBtn").addEventListener("click", () => runAcceptanceCheck().catch((error) => toast(error.message)));
+  if ($("prepareTestsBtn")) $("prepareTestsBtn").addEventListener("click", () => prepareTestGenerationWorkflow().catch((error) => toast(error.message)));
   $("applyTemplateBtn").addEventListener("click", () => applyWorkflowTemplate().catch((error) => toast(error.message)));
   $("workflowTemplateSelect").addEventListener("change", () => state.data && renderWorkflowTemplates(state.data.workflowTemplates || {}));
   if ($("suggestAgentBtn")) $("suggestAgentBtn").addEventListener("click", () => suggestAgentAction().catch((error) => toast(error.message)));

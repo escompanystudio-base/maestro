@@ -327,6 +327,7 @@
             <button class="tab" type="button" role="tab" aria-selected="false" data-tab="logs">Log</button>
             <button class="tab" type="button" role="tab" aria-selected="false" data-tab="issues">Sorunlar</button>
             <button class="tab" type="button" role="tab" aria-selected="false" data-tab="tests">Test</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="quality">Kalite</button>
             <button class="tab" type="button" role="tab" aria-selected="false" data-tab="source">Kaynak</button>
             <button class="tab" type="button" role="tab" aria-selected="false" data-tab="files">Dosyalar</button>
             <button class="tab active" type="button" role="tab" aria-selected="true" data-tab="chat">Sohbet</button>
@@ -367,6 +368,20 @@
             <span id="testStatusText" class="toolbar-note">Test bekliyor</span>
           </div>
           <div id="testOutput" class="test-output"></div>
+        </section>
+
+        <section id="tab-quality" class="tab-pane" role="tabpanel">
+          <div class="workspace-toolbar quality-toolbar">
+            <label class="mini-check">
+              <input id="qualityAutoFix" type="checkbox">
+              <span>Format duzelt</span>
+            </label>
+            <button id="runQualityBtn" class="btn secondary" type="button">Kalite Taramasi</button>
+            <button id="runAcceptanceBtn" class="btn quiet" type="button">Kabul Kontrolu</button>
+            <button id="prepareTestsBtn" class="btn quiet" type="button">Test Uretme Akisi</button>
+            <span id="qualityStatusText" class="toolbar-note">Kalite taramasi bekliyor</span>
+          </div>
+          <div id="qualityOutput" class="quality-output"></div>
         </section>
 
         <section id="tab-source" class="tab-pane" role="tabpanel">
