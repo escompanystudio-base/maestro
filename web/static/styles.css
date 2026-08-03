@@ -1153,6 +1153,7 @@ input[type="checkbox"] {
 
 .diagnostics-output,
 .test-output,
+.quality-output,
 .source-tree-output {
   min-height: 520px;
   max-height: calc(100vh - 290px);
@@ -1181,7 +1182,8 @@ input[type="checkbox"] {
 }
 
 .diagnostic-row > span,
-.test-row > span {
+.test-row > span,
+.quality-item > span {
   align-self: start;
   justify-self: end;
   padding: 3px 8px;
@@ -1194,24 +1196,34 @@ input[type="checkbox"] {
 
 .diagnostic-row.error,
 .test-row.failed,
-.test-summary.failed {
+.test-summary.failed,
+.quality-run-summary.failed,
+.quality-section.failed,
+.quality-item.failed {
   border-color: rgba(248, 113, 113, 0.42);
   background: var(--red-soft);
 }
 
-.diagnostic-row.warn {
+.diagnostic-row.warn,
+.quality-run-summary.warn,
+.quality-section.warn,
+.quality-item.warn {
   border-color: rgba(245, 158, 11, 0.42);
   background: var(--amber-soft);
 }
 
 .diagnostic-row.success,
 .test-row.success,
-.test-summary.success {
+.test-summary.success,
+.quality-run-summary.success,
+.quality-section.success,
+.quality-item.success {
   border-color: rgba(34, 197, 94, 0.42);
   background: var(--green-soft);
 }
 
 .test-summary,
+.quality-run-summary,
 .source-tree-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1223,18 +1235,22 @@ input[type="checkbox"] {
 .source-tree-summary > div span,
 .source-tree-summary > div strong,
 .test-summary strong,
-.test-summary span {
+.test-summary span,
+.quality-run-summary strong,
+.quality-run-summary span {
   display: block;
 }
 
 .source-tree-summary span,
-.test-summary span {
+.test-summary span,
+.quality-run-summary span {
   color: var(--muted);
   font-size: 12px;
 }
 
 .source-tree-summary strong,
-.test-summary strong {
+.test-summary strong,
+.quality-run-summary strong {
   overflow: hidden;
   font-family: var(--mono);
   font-size: 13px;
@@ -1269,6 +1285,77 @@ input[type="checkbox"] {
   font-family: var(--mono);
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+.quality-toolbar {
+  flex-wrap: wrap;
+}
+
+.mini-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mini-check input {
+  flex: 0 0 auto;
+}
+
+.quality-section {
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.quality-section-head,
+.quality-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 10px;
+}
+
+.quality-section-head {
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.quality-section-head span {
+  justify-self: end;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.quality-items {
+  display: grid;
+  gap: 8px;
+}
+
+.quality-item {
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--chrome);
+}
+
+.quality-item p {
+  margin: 4px 0;
+  color: var(--text-soft);
+}
+
+.quality-item small {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-tree-list {
@@ -1732,6 +1819,9 @@ th {
   .checkpoint-actions,
   .issue-summary,
   .test-summary,
+  .quality-run-summary,
+  .quality-section-head,
+  .quality-item,
   .source-tree-summary,
   .diagnostic-row,
   .test-row,
