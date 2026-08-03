@@ -1291,6 +1291,53 @@ input[type="checkbox"] {
   flex-wrap: wrap;
 }
 
+.webapp-box {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.webapp-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+  gap: 12px;
+  align-items: center;
+}
+
+.webapp-head strong,
+.webapp-head span {
+  display: block;
+}
+
+.webapp-head strong {
+  font-size: 14px;
+}
+
+.webapp-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.webapp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.web-audit-output {
+  min-height: 150px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--chrome);
+}
+
 .mini-check {
   display: inline-flex;
   align-items: center;
@@ -1822,12 +1869,18 @@ th {
   .quality-run-summary,
   .quality-section-head,
   .quality-item,
+  .webapp-head,
   .source-tree-summary,
   .diagnostic-row,
   .test-row,
   .source-tree-row,
   .chat-input-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .webapp-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .source-actions {

@@ -263,6 +263,7 @@ def test_active_workflow_adds_quality_stages(project_dir):
     workflow = app.active_workflow_data()
     stages = workflow["stages"]
     names = [stage["name"] for stage in stages]
+    assert "UI Polish" in names
     assert "Test Uretimi" in names
     assert "Kabul Kontrolu" in names
     assert any(orkestra.REQUEST_FILE in stage.get("reads", []) for stage in stages)
@@ -313,6 +314,60 @@ def test_quality_api_acceptance_and_test_generation(project_dir):
         generated = orkestra.load_generated_workflow(project_dir)
         assert generated is not None
         assert generated["project_type"] == "quality-test-generation"
+    finally:
+        server.shutdown()
+        shutdown_server(server)
+
+
+def test_webapp_detects_vite_preview_commands(project_dir):
+    (project_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "scripts": {"dev": "vite --host 0.0.0.0", "build": "vite build"},
+                "dependencies": {"@vitejs/plugin-react": "^5.0.0", "react": "^19.0.0"},
+                "devDependencies": {"vite": "^7.0.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = MaestroWebPanel(project_dir)
+    detected = app.detect_webapp_payload({"port": 5454})
+
+    assert detected["detected"] is True
+    selected = detected["selected"]
+    assert selected["stack"] == "vite"
+    assert selected["buildCommand"][-2:] == ["run", "build"]
+    assert "--port" in selected["previewCommand"]
+    assert "5454" in selected["previewCommand"]
+
+
+def test_webapp_api_preview_audit_and_ui_polish(project_dir):
+    (project_dir / "index.html").write_text(
+        "<!doctype html><html><body><main><h1>Maestro App</h1><p>Hazir.</p></main></body></html>",
+        encoding="utf-8",
+    )
+    server = create_server("127.0.0.1", 0, project_dir)
+    _serve(server)
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        preview = _post_json(f"{base}/api/webapp/preview", {"build": False}, timeout=15)
+        assert preview["ok"] is True
+        assert preview["result"]["preview"]["stack"] == "static"
+        assert preview["status"]["webApp"]["previewRunning"] is True
+
+        audit = _post_json(f"{base}/api/webapp/audit", {"url": preview["result"]["preview"]["url"]}, timeout=20)
+        assert audit["ok"] is True
+        assert audit["result"]["status"] in {"success", "warn", "failed"}
+        assert (project_dir / "web_qa_raporu.json").exists()
+
+        flow = _post_json(f"{base}/api/webapp/ui-polish", {"autoStart": False})
+        assert flow["ok"] is True
+        generated = orkestra.load_generated_workflow(project_dir)
+        assert generated is not None
+        assert generated["project_type"] == "quality-ui-polish"
+
+        stopped = _post_json(f"{base}/api/webapp/stop-preview", {})
+        assert stopped["ok"] is True
     finally:
         server.shutdown()
         shutdown_server(server)

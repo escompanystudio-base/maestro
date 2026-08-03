@@ -10,8 +10,11 @@ const state = {
   sourceBusy: false,
   testBusy: false,
   qualityBusy: false,
+  webBusy: false,
   lastTestResult: null,
   lastQualityResult: null,
+  lastWebPreviewResult: null,
+  lastWebAuditResult: null,
   smartBusy: false,
   uiMode: loadLocalSetting("maestroUiMode", "expert"),
   notificationsEnabled: loadLocalSetting("maestroNotifications", "off") === "on",
@@ -19,7 +22,7 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
-const OUTPUT_PRIORITY = ["kontrol.md", "rapor.md", "tasarim.md", "plan.md", "kaynak_context.md", "workflow_generated.json", "istek.md"];
+const OUTPUT_PRIORITY = ["kontrol.md", "web_qa_raporu.json", "kalite_raporu.json", "test_raporu.json", "rapor.md", "tasarim.md", "plan.md", "kaynak_context.md", "workflow_generated.json", "istek.md"];
 
 function loadLocalSetting(key, fallback) {
   try {
@@ -69,6 +72,10 @@ function setBusy(running, waitingCheckpoint) {
   if ($("runQualityBtn")) $("runQualityBtn").disabled = running || state.qualityBusy;
   if ($("runAcceptanceBtn")) $("runAcceptanceBtn").disabled = running || state.qualityBusy;
   if ($("prepareTestsBtn")) $("prepareTestsBtn").disabled = running || state.qualityBusy;
+  if ($("startPreviewBtn")) $("startPreviewBtn").disabled = running || state.webBusy;
+  if ($("runWebAuditBtn")) $("runWebAuditBtn").disabled = running || state.webBusy;
+  if ($("prepareUiPolishBtn")) $("prepareUiPolishBtn").disabled = running || state.webBusy;
+  if ($("stopPreviewBtn")) $("stopPreviewBtn").disabled = state.webBusy;
   if ($("suggestAgentBtn")) $("suggestAgentBtn").disabled = state.smartBusy;
   if ($("buildContextBtn")) $("buildContextBtn").disabled = running || state.smartBusy;
   if ($("saveMemoryBtn")) $("saveMemoryBtn").disabled = state.smartBusy;
@@ -495,6 +502,100 @@ function renderQualityResult(result) {
   `;
 }
 
+function renderWebAppSummary(summary) {
+  if (!$("webStatusText")) return;
+  if (state.webBusy) {
+    $("webStatusText").textContent = "Web/App QA calisiyor";
+    return;
+  }
+  const current = summary || {};
+  const report = current.report || {};
+  const preview = current.previewRunning ? current.previewUrl : "";
+  const parts = [preview ? `Preview: ${preview}` : "Preview bekliyor"];
+  if (report.exists) {
+    parts.push(`${report.status || "unknown"} - ${report.warnings || 0} uyari, ${report.failed || 0} hata`);
+  }
+  $("webStatusText").textContent = parts.join(" | ");
+  if (!state.lastWebPreviewResult && !state.lastWebAuditResult && $("webAuditOutput")) {
+    $("webAuditOutput").innerHTML = emptyState("Web/App QA bekliyor", "Build + Preview ile link acilir; Screenshot QA 375, 768 ve 1440px kontrollerini calistirir.");
+  }
+}
+
+function renderWebPreviewResult(result) {
+  if (!$("webAuditOutput")) return;
+  const preview = result.preview || {};
+  const build = result.build || null;
+  $("webAuditOutput").innerHTML = `
+    <div class="quality-run-summary ${escapeAttr(result.ok ? "success" : "failed")}">
+      <strong>${escapeHtml(preview.stack || "preview")}</strong>
+      <span>${preview.url ? `<a href="${escapeAttr(preview.url)}" target="_blank" rel="noreferrer">${escapeHtml(preview.url)}</a>` : escapeHtml(result.message || "-")}</span>
+      <span>${escapeHtml(preview.root || ".")}</span>
+    </div>
+    <section class="quality-section ${escapeAttr(result.ok ? "success" : "failed")}">
+      <div class="quality-section-head">
+        <strong>Build + Preview</strong>
+        <span>${escapeHtml(result.message || "-")}</span>
+      </div>
+      <div class="quality-items">
+        <article class="quality-item ${escapeAttr(result.ok ? "success" : "failed")}">
+          <div>
+            <strong>Preview command</strong>
+            <p>${escapeHtml((preview.previewCommand || []).join(" ") || "-")}</p>
+            ${preview.log ? `<small>${escapeHtml(preview.log)}</small>` : ""}
+          </div>
+          <span>${escapeHtml(preview.ready ? "success" : "warn")}</span>
+        </article>
+        ${build ? `
+          <article class="quality-item ${escapeAttr(build.status || "info")}">
+            <div>
+              <strong>Build</strong>
+              <p>${escapeHtml(build.command || "")}</p>
+              <small>${escapeHtml((build.output || "").slice(0, 900))}</small>
+            </div>
+            <span>${escapeHtml(build.status || "-")}</span>
+          </article>
+        ` : ""}
+      </div>
+    </section>
+  `;
+}
+
+function renderWebAuditResult(result) {
+  if (!result || !$("webAuditOutput")) {
+    renderWebAppSummary(state.data && state.data.webApp);
+    return;
+  }
+  const sections = result.sections || [];
+  $("webStatusText").textContent = `${result.status || "-"} - ${result.warnings || 0} uyari, ${result.failed || 0} hata`;
+  $("webAuditOutput").innerHTML = `
+    <div class="quality-run-summary ${escapeAttr(result.status || "info")}">
+      <strong>${escapeHtml(result.status || "-")}</strong>
+      <span>${result.url ? `<a href="${escapeAttr(result.url)}" target="_blank" rel="noreferrer">${escapeHtml(result.url)}</a>` : "URL yok"}</span>
+      <span>${escapeHtml(result.ranAt || "")}</span>
+    </div>
+    ${sections.map((section) => `
+      <section class="quality-section ${escapeAttr(section.status || "info")}">
+        <div class="quality-section-head">
+          <strong>${escapeHtml(section.title || section.key || "Web QA")}</strong>
+          <span>${escapeHtml(section.status || "-")}</span>
+        </div>
+        <div class="quality-items">
+          ${(section.rows || []).map((row) => `
+            <article class="quality-item ${escapeAttr(row.status || "info")}">
+              <div>
+                <strong>${escapeHtml(row.name || "-")}</strong>
+                <p>${escapeHtml(row.detail || "")}</p>
+                ${row.file ? `<small>${escapeHtml(row.file)}${row.line ? `:${escapeHtml(row.line)}` : ""}</small>` : ""}
+              </div>
+              <span>${escapeHtml(row.status || "-")}</span>
+            </article>
+          `).join("") || emptyState("Kayit yok", "Bu bolumde bulgu yok.")}
+        </div>
+      </section>
+    `).join("")}
+  `;
+}
+
 function renderAcceptanceResult(result) {
   if (!result) return;
   state.lastQualityResult = {
@@ -644,6 +745,7 @@ function renderStatus(data) {
   renderWorkflowTemplates(data.workflowTemplates || {});
   renderTestResult(state.lastTestResult);
   renderQualitySummary(data.projectQuality || {});
+  renderWebAppSummary(data.webApp || {});
   renderChat(data);
   renderMetrics(data);
   renderSnapshots(data);
@@ -1244,6 +1346,78 @@ async function prepareTestGenerationWorkflow() {
   activateTab("quality");
 }
 
+async function startWebPreview() {
+  state.webBusy = true;
+  $("webStatusText").textContent = "Build + Preview calisiyor";
+  try {
+    const data = await api("/api/webapp/preview", {
+      method: "POST",
+      body: JSON.stringify({ build: true })
+    });
+    state.lastWebPreviewResult = data.result;
+    renderWebPreviewResult(data.result);
+    toast(data.result.ok ? "Preview hazir." : "Build/preview kontrol istiyor.");
+    state.webBusy = false;
+    renderStatus(data.status || await api("/api/status"));
+    activateTab("quality");
+  } finally {
+    state.webBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function runWebAudit() {
+  state.webBusy = true;
+  $("webStatusText").textContent = "Screenshot QA calisiyor";
+  try {
+    const data = await api("/api/webapp/audit", {
+      method: "POST",
+      body: JSON.stringify({ build: true })
+    });
+    state.lastWebAuditResult = data.result;
+    renderWebAuditResult(data.result);
+    toast(data.result.status === "success" ? "Web/App QA temiz." : "Web/App QA bulgulari var.");
+    state.webBusy = false;
+    renderStatus(data.status || await api("/api/status"));
+    activateTab("quality");
+  } finally {
+    state.webBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function stopWebPreview() {
+  state.webBusy = true;
+  try {
+    const data = await api("/api/webapp/stop-preview", { method: "POST", body: "{}" });
+    toast(data.stopped ? "Preview durduruldu." : "Acik preview yok.");
+    state.lastWebPreviewResult = null;
+    state.webBusy = false;
+    renderStatus(data.status || await api("/api/status"));
+    activateTab("quality");
+  } finally {
+    state.webBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
+async function prepareUiPolishWorkflow() {
+  state.webBusy = true;
+  try {
+    const data = await api("/api/webapp/ui-polish", {
+      method: "POST",
+      body: JSON.stringify({ autoStart: false })
+    });
+    toast(data.message || "UI polish workflow hazir.");
+    state.webBusy = false;
+    renderStatus(data.status || await api("/api/status"));
+    activateTab("quality");
+  } finally {
+    state.webBusy = false;
+    setBusy(Boolean(state.data && state.data.running), Boolean(state.data && state.data.waitingCheckpoint));
+  }
+}
+
 async function runErrorAction(action) {
   if (action === "run_tests") {
     await runProjectTests();
@@ -1447,6 +1621,10 @@ function bindEvents() {
   if ($("runQualityBtn")) $("runQualityBtn").addEventListener("click", () => runQualityAudit().catch((error) => toast(error.message)));
   if ($("runAcceptanceBtn")) $("runAcceptanceBtn").addEventListener("click", () => runAcceptanceCheck().catch((error) => toast(error.message)));
   if ($("prepareTestsBtn")) $("prepareTestsBtn").addEventListener("click", () => prepareTestGenerationWorkflow().catch((error) => toast(error.message)));
+  if ($("startPreviewBtn")) $("startPreviewBtn").addEventListener("click", () => startWebPreview().catch((error) => toast(error.message)));
+  if ($("runWebAuditBtn")) $("runWebAuditBtn").addEventListener("click", () => runWebAudit().catch((error) => toast(error.message)));
+  if ($("prepareUiPolishBtn")) $("prepareUiPolishBtn").addEventListener("click", () => prepareUiPolishWorkflow().catch((error) => toast(error.message)));
+  if ($("stopPreviewBtn")) $("stopPreviewBtn").addEventListener("click", () => stopWebPreview().catch((error) => toast(error.message)));
   $("applyTemplateBtn").addEventListener("click", () => applyWorkflowTemplate().catch((error) => toast(error.message)));
   $("workflowTemplateSelect").addEventListener("change", () => state.data && renderWorkflowTemplates(state.data.workflowTemplates || {}));
   if ($("suggestAgentBtn")) $("suggestAgentBtn").addEventListener("click", () => suggestAgentAction().catch((error) => toast(error.message)));
